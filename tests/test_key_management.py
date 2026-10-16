@@ -49,3 +49,36 @@ def test_proteger_clave():
     assert len(resultado["nonce"]) == 12
     assert len(resultado["clave_cifrada"]) == 48
     assert resultado["clave_cifrada"] != clave
+
+from cryptography.exceptions import InvalidTag
+from vault.key_management import recuperar_clave
+
+
+def test_recuperar_clave_correcta():
+    clave = generar_clave_archivo()
+    protegida = proteger_clave(clave, "MiClave123")
+
+    recuperada = recuperar_clave(protegida, "MiClave123")
+
+    assert recuperada == clave
+
+
+def test_recuperar_clave_contraseña_incorrecta():
+    clave = generar_clave_archivo()
+    protegida = proteger_clave(clave, "MiClave123")
+
+    with pytest.raises(InvalidTag):
+        recuperar_clave(protegida, "ClaveIncorrecta")
+
+
+def test_recuperar_clave_modificada():
+    clave = generar_clave_archivo()
+    protegida = proteger_clave(clave, "MiClave123")
+
+    protegida["clave_cifrada"] = (
+        bytes([protegida["clave_cifrada"][0] ^ 1])
+        + protegida["clave_cifrada"][1:]
+    )
+
+    with pytest.raises(InvalidTag):
+        recuperar_clave(protegida, "MiClave123")
