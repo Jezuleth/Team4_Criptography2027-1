@@ -84,3 +84,35 @@ def proteger_clave(clave_archivo: bytes, contraseña: str) -> dict:
         "nonce": nonce,
         "clave_cifrada": clave_cifrada
     }
+
+
+def recuperar_clave(datos_protegidos: dict, contraseña: str) -> bytes:
+    """
+    Recupera la clave AES-256 del archivo usando
+    la contraseña del propietario.
+
+    Si la contraseña es incorrecta o los datos
+    fueron modificados, AES-GCM rechaza el descifrado.
+    """
+    salt = datos_protegidos["salt"]
+    nonce = datos_protegidos["nonce"]
+    clave_cifrada = datos_protegidos["clave_cifrada"]
+
+    if len(nonce) != 12:
+        raise ValueError("El nonce debe tener 12 bytes.")
+
+    # Obtener nuevamente la clave de protección
+    clave_proteccion = derivar_clave(contraseña, salt)
+
+    # Recuperar la clave original del archivo
+    aesgcm = AESGCM(clave_proteccion)
+
+    aad = b"D2-KEY-WRAP-v1"
+
+    clave_archivo = aesgcm.decrypt(
+        nonce,
+        clave_cifrada,
+        aad
+    )
+
+    return clave_archivo
