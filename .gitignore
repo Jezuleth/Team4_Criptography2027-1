@@ -1,0 +1,19 @@
+# Entorno virtual
+.venv/
+
+# Archivos temporales de Python
+__pycache__/
+*.pyc
+
+# Caché de pruebas
+.pytest_cache/
+
+# Configuración local
+.env
+
+# Claves privadas
+*.pem
+*.key
+
+# Archivos generados durante pruebas
+test_output/
