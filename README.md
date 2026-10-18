@@ -1,138 +1,154 @@
-\# Team 4 – Cryptography 2027-1
 
+# Secure Digital Document Vault
+### Cryptography · Team 4 · UNAM · 2027-1
 
+Secure Digital Document Vault is an academic project developed for the Cryptography course at the Faculty of Engineering, UNAM.
 
-Repository for exercises, assignments, and documentation for our Cryptography course at UNAM.
+The project focuses on protecting digital documents through modern cryptographic techniques.
 
+---
 
+## D2 | Secure Symmetric Encryption Module
 
-\## Team Members
+This deliverable implements the cryptographic core of the Secure Digital Document Vault, providing secure file encryption and decryption for a single owner.
 
+The implementation uses AES-256-GCM, an authenticated encryption algorithm that provides:
 
+- Confidentiality of encrypted files.
+- Integrity verification.
+- Detection of unauthorized modifications.
+- Authentication of file metadata.
 
-| Student ID | Name | GitHub Account |
+### Cryptographic Specifications
 
-|---|---|---|
+| Component | Implementation |
+|:---|:---|
+| Encryption algorithm | AES-256-GCM (AEAD) |
+| Encryption key | 256 bits (32 bytes) |
+| Nonce | 96 bits (12 bytes) |
+| Key derivation | Scrypt |
+| Salt | 128 bits (16 bytes) |
+| Metadata authentication | Additional Authenticated Data (AAD) |
+| Secure randomness | `os.urandom()` |
+| Output format | JSON-based `.vault` container |
 
+---
+
+## System Architecture
+
+The system is organized into four independent modules:
+
+| Module | Responsibility |
+|:---|:---|
+| `vault/encryption.py` | Encrypts file contents using AES-256-GCM. |
+| `vault/key_management.py` | Generates and protects cryptographic keys. |
+| `vault/container.py` | Creates, validates, stores, and reads encrypted containers. |
+| `vault/decryption.py` | Decrypts files and verifies authentication. |
+
+### Encryption Process
+
+1. Read the original file.
+2. Generate a fresh 256-bit encryption key and a random nonce.
+3. Generate and authenticate file metadata using AAD.
+4. Encrypt the file using AES-256-GCM.
+5. Protect the encryption key using Scrypt and AES-GCM.
+6. Store the encrypted information in a `.vault` container.
+
+### Decryption Process
+
+1. Read the encrypted container.
+2. Recover the file encryption key using the owner's password.
+3. Verify the authentication of the ciphertext and metadata.
+4. Decrypt and recover the original file.
+
+If authentication fails, the decryption operation is rejected.
+
+---
+
+## Installation
+
+### Requirements
+
+- Python 3
+- cryptography
+- pytest
+
+Install the dependencies:
+
+```bash
+python -m pip install cryptography pytest
+```
+
+## Testing
+
+The project includes 30 automated tests implemented with Pytest.
+
+Run all tests from the project root directory:
+
+```bash
+python -m pytest -v
+```
+
+### Test Results
+
+| Module | Tests | Result |
+|:---|---:|:---|
+| Encryption | 6 | Passed |
+| Key Management | 9 | Passed |
+| Container | 8 | Passed |
+| Decryption | 7 | Passed |
+| **Total** | **30** | **Passed** |
+
+### Security Validation
+
+The implementation includes tests for:
+
+1. Successful encryption and decryption.
+2. Rejection of incorrect keys or passwords.
+3. Detection of modified ciphertext.
+4. Detection of modified metadata.
+5. Different ciphertexts from independent encryption operations.
+
+**Result: 30 tests passed successfully.**
+
+---
+
+## Security Considerations
+
+AES-256-GCM provides authenticated encryption, combining confidentiality and integrity protection.
+
+Each file receives a fresh random encryption key and nonce. Reusing the same nonce with the same AES-GCM key can compromise security.
+
+File metadata is authenticated using AAD, preventing unauthorized modifications from going undetected during decryption.
+
+Cryptographic keys, nonces, and salts are generated using operating-system-provided secure randomness.
+
+## Current Scope
+
+This deliverable supports secure file encryption and decryption for a single owner.
+
+The following features are outside the current scope:
+
+- Multi-user access.
+- Encrypted file sharing.
+- Graphical user interface.
+- Full security auditing.
+
+---
+
+## Development Team
+
+Universidad Nacional Autónoma de México  
+Faculty of Engineering  
+Cryptography · Group 4 · Semester 2027-1
+
+| Student ID | Team Member | GitHub |
+|:---|:---|:---|
 | 319215555 | Alfaro Dominguez Arturo | @R2D2Alfa |
-
 | 422526115 | Herrera Gallegos Karina Jezuleth | @Jezuleth |
-
 | 422526067 | Sanchez Duran Dannae | @ddanae |
-
 | 422534286 | Infante Martinez Javier de Jesus | @JavierInfanteB |
 
+---
 
-
-\## D2 – Secure Symmetric Encryption Module
-
-
-
-This project implements the cryptographic core of the \*\*Secure Digital Document Vault\*\*, providing authenticated file encryption and decryption for a single owner.
-
-
-
-The system uses \*\*AES-256-GCM\*\* to protect file confidentiality and integrity, including the detection of unauthorized modifications.
-
-
-
-\### Cryptographic Design
-
-
-
-\- \*\*Encryption algorithm:\*\* AES-256-GCM (AEAD).
-
-\- \*\*File encryption key:\*\* Fresh 256-bit random key per file.
-
-\- \*\*Nonce:\*\* Random 96-bit nonce generated for each encryption operation.
-
-\- \*\*Key protection:\*\* Scrypt for password-based key derivation and AES-GCM for protecting the file key.
-
-\- \*\*Metadata authentication:\*\* Additional Authenticated Data (AAD).
-
-\- \*\*Secure randomness:\*\* Python's `os.urandom()`.
-
-\- \*\*Output:\*\* JSON-based `.vault` container.
-
-
-
-\### Project Modules
-
-
-
-| Module | Description |
-
-|---|---|
-
-| `vault/encryption.py` | Encrypts file contents using AES-256-GCM. |
-
-| `vault/key\_management.py` | Generates cryptographic keys and protects them using a password. |
-
-| `vault/container.py` | Creates, stores, and reads encrypted containers. |
-
-| `vault/decryption.py` | Recovers encrypted files and verifies authentication. |
-
-
-
-\### Installation
-
-
-
-Install the required Python dependencies:
-
-
-
-```bash
-
-python -m pip install cryptography pytest
-
-```
-
-
-
-\### Running Tests
-
-
-
-From the project root directory, execute:
-
-
-
-```bash
-
-python -m pytest -v
-
-```
-
-
-
-The implementation includes \*\*30 automated tests\*\* covering encryption, decryption, key management, container handling, and tamper detection.
-
-
-
-\### Security Tests
-
-
-
-The tests verify:
-
-
-
-1\. Successful encryption and decryption.
-
-2\. Rejection of incorrect encryption keys.
-
-3\. Detection of modified ciphertext.
-
-4\. Detection of modified metadata.
-
-5\. Different ciphertexts from independent encryption operations.
-
-
-
-\### Current Scope
-
-
-
-This deliverable supports encryption and decryption for a single file owner. File sharing and multi-user access are not implemented at this stage.
 
