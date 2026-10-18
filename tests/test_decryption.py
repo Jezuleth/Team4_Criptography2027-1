@@ -142,7 +142,7 @@ def test_contenedor_modificado(tmp_path):
         ruta.read_text(encoding="utf-8")
     )
 
-    contenido["metadatos"]["nombre_archivo"] = "alterado.txt"
+    contenido["header"]["nombre_archivo"] = "alterado.txt"
 
     ruta.write_text(
         json.dumps(contenido),
