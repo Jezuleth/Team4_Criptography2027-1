@@ -16,4 +16,4 @@ __pycache__/
 *.key
 
 # Archivos generados durante pruebas
-test_output/
+evidencias_d2/
