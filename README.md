@@ -267,3 +267,58 @@ Cryptography · Group 4 · Semester 2027-1
 ---
 
 
+## D4 - Interactive Security Demonstration
+
+The project includes an interactive demonstration of the
+Secure Digital Document Vault using the cryptographic modules
+implemented in D2 and D3.
+
+### Requirements
+
+- Python 3.12 or newer
+- Dependencies from `requirements.txt`
+- Tkinter (included in most standard Python installations)
+
+Install dependencies:
+
+```bash
+python -m pip install -r requirements.txt
+```
+
+### Run the graphical demonstration
+
+From the project root:
+
+```bash
+python demo_d4_gui.py
+```
+
+### Demonstration scenarios
+
+1. **Select Document:** Choose a local file to encrypt.
+2. **Encrypt & Share:** Encrypt the document once using AES-256-GCM and protect its file key separately for Alice and Bob using RSA-OAEP.
+3. **Authorized Decryption:** Alice and Bob can decrypt the container using their corresponding private keys.
+4. **Unauthorized Access:** Mallory attempts to decrypt the same container and is denied access.
+5. **Tampering Detection:** Modify a byte of a copy of the encrypted container and verify that AES-GCM rejects the modified ciphertext.
+
+The interface displays the original document, a preview of the
+ciphertext, recovered content, and security verification results.
+
+### Run the command-line demonstration
+
+```bash
+python demo_d4.py
+```
+
+### Run automated tests
+
+```bash
+python -m pytest -v
+```
+
+The D4 demonstration uses the existing cryptographic modules
+and does not replace the project's automated security tests.
+
+**Note:** Demonstration keys are generated temporarily.
+The application is an educational prototype, not a production
+key-management or user-authentication system.
