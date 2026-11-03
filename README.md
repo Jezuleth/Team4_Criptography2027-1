@@ -17,11 +17,6 @@ The project focuses on protecting digital documents through modern cryptographic
 | [D4](#d4--midterm-system-presentation--security-review) | Interactive security demonstration and system review using Tkinter. |
 
 ---
-
-## D3 | Hybrid Encryption and Secure File Sharing
-
-D3 extends the vault so that a file is **encrypted once** and shared with **multiple authorized recipients**. Only those recipients can decrypt it, even if the `.vault` container is publicly exposed.
-
 ## D4 | Midterm System Presentation & Security Review
 
 D4 integrates the previous deliverables into an interactive security demonstration of the Secure Digital Document Vault.
@@ -71,8 +66,9 @@ The demonstration uses temporary identities and cryptographic keys. Public-key a
 
 The project is an academic prototype and is not intended for production use.
 
+## D3 | Hybrid Encryption and Secure File Sharing
 
-
+D3 extends the vault so that a file is **encrypted once** and shared with **multiple authorized recipients**. Only those recipients can decrypt it, even if the `.vault` container is publicly exposed.
 
 The system uses **hybrid encryption**:
 
@@ -288,20 +284,25 @@ File metadata is authenticated using AAD, preventing unauthorized modifications 
 
 Cryptographic keys, nonces, and salts are generated using operating-system-provided secure randomness.
 
+
 ## Current Scope
 
-D2 supports secure file encryption and decryption for a single owner with a password. D3 adds multi-user access and encrypted file sharing with hybrid encryption.
+D2 supports password-protected encryption and decryption for a single owner using AES-256-GCM. D3 extends the system with hybrid encryption, allowing secure file sharing with multiple authorized recipients using RSA-OAEP.
+
+D4 integrates these functionalities into an interactive security demonstration developed with Python and Tkinter. The demonstration includes file encryption, successful decryption by authorized recipients (Alice and Bob), rejection of unauthorized access (Mallory), and detection of tampered encrypted files.
 
 The following features are outside the current scope:
 
-- Public-key authenticity infrastructure (a PKI or verified key directory); fingerprint verification is provided.
-- Digital signatures (authentication between recipients).
-- Revocation of access already granted (removing a recipient requires re-encrypting the file).
+- Public-key authenticity infrastructure (PKI or verified key directory); fingerprint verification is provided.
+- Digital signatures for independent sender authentication.
+- Revocation of previously granted access (removing a recipient requires re-encrypting the file).
 - Full security auditing.
+- Production-ready identity and key management.
 
-See the limitations section of [`docs/D3_HYBRID_DESIGN.md`](docs/D3_HYBRID_DESIGN.md).
+This project is an academic prototype intended to demonstrate cryptographic security principles.
 
 ---
+
 
 ## Development Team
 
