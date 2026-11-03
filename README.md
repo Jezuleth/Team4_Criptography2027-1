@@ -14,12 +14,65 @@ The project focuses on protecting digital documents through modern cryptographic
 |:---|:---|
 | [D2](#d2--secure-symmetric-encryption-module) | Password-protected AES-256-GCM encryption for a single owner. |
 | [D3](#d3--hybrid-encryption-and-secure-file-sharing) | Hybrid encryption: one encrypted file shared with multiple recipients. |
+| [D4](#d4--midterm-system-presentation--security-review) | Interactive security demonstration and system review using Tkinter. |
 
 ---
 
 ## D3 | Hybrid Encryption and Secure File Sharing
 
 D3 extends the vault so that a file is **encrypted once** and shared with **multiple authorized recipients**. Only those recipients can decrypt it, even if the `.vault` container is publicly exposed.
+
+## D4 | Midterm System Presentation & Security Review
+
+D4 integrates the previous deliverables into an interactive security demonstration of the Secure Digital Document Vault.
+
+The demonstration uses Python and Tkinter to illustrate authenticated encryption, multi-recipient file sharing, unauthorized access rejection, and tampering detection.
+
+### Running the Interactive Demo
+
+From the project root directory, install the required dependencies:
+
+```bash
+python -m pip install cryptography pytest
+```
+
+Launch the graphical interface:
+
+```bash
+python demo_d4_gui.py
+```
+
+Alternatively, run the command-line demonstration:
+
+```bash
+python demo_d4.py
+```
+
+### Demonstration Scenarios
+
+| Scenario | Expected Result |
+|:---|:---|
+| File encryption | An encrypted `.vault` container is generated. |
+| Alice (authorized recipient) | Successfully decrypts the file. |
+| Bob (authorized recipient) | Successfully decrypts the same container. |
+| Mallory (unauthorized recipient) | Access is denied. |
+| Tampered ciphertext | AES-GCM authentication fails and decryption is rejected. |
+
+### Security Review
+
+- **D1:** System architecture, trust boundaries, protected assets, and threat model.
+- **D2:** AES-256-GCM authenticated encryption, random nonce generation, and metadata authentication using AAD.
+- **D3:** Hybrid encryption using RSA-OAEP with SHA-256 and per-recipient encrypted file keys.
+- **D4:** Interactive demonstration of the implemented security properties.
+
+### Current Limitations
+
+The demonstration uses temporary identities and cryptographic keys. Public-key authenticity is assumed rather than established through a PKI or trusted key directory. Digital signatures for independent sender authentication are not implemented.
+
+The project is an academic prototype and is not intended for production use.
+
+
+
 
 The system uses **hybrid encryption**:
 
@@ -244,7 +297,6 @@ The following features are outside the current scope:
 - Public-key authenticity infrastructure (a PKI or verified key directory); fingerprint verification is provided.
 - Digital signatures (authentication between recipients).
 - Revocation of access already granted (removing a recipient requires re-encrypting the file).
-- Graphical user interface.
 - Full security auditing.
 
 See the limitations section of [`docs/D3_HYBRID_DESIGN.md`](docs/D3_HYBRID_DESIGN.md).
