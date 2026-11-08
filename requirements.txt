@@ -1,2 +1,3 @@
 cryptography==50.0.2
 pytest==9.1.1
+eciespy==0.4.7

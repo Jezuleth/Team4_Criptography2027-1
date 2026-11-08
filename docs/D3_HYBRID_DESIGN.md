@@ -6,60 +6,60 @@ Design and security decisions for multi-recipient sharing in the Secure Digital 
 
 ## 1. Hybrid Design Explanation
 
-```
-File ──► AES-256-GCM (AEAD, from D2) ──► ciphertext + tag      (encrypted ONCE)
+```text
+File ──► AES-256-GCM (AEAD, from D2) ──► ciphertext + tag     (encrypted ONCE)
 
 File key (32 random bytes)
-   ├─► RSA-OAEP with Alice's public key ──► encrypted_key (Alice)
-   ├─► RSA-OAEP with Bob's public key   ──► encrypted_key (Bob)
-   └─► RSA-OAEP with Carol's public key ──► encrypted_key (Carol)
+   ├─► ECIES (secp256k1) with Alice's public key ──► encrypted_key (Alice)
+   ├─► ECIES (secp256k1) with Bob's public key   ──► encrypted_key (Bob)
+   └─► ECIES (secp256k1) with Carol's public key ──► encrypted_key (Carol)
 ```
 
 ### Why hybrid encryption is used
 
-Public-key and symmetric encryption each solve a different problem:
+Public-key and symmetric encryption solve different problems:
 
-| | Symmetric (AES-GCM) | Public-key (RSA-OAEP) |
+| | Symmetric (AES-256-GCM) | Public-key (ECIES, secp256k1) |
 |:---|:---|:---|
-| Key distribution | Both sides need the same secret in advance | Anyone can encrypt with a public key; only the private key holder decrypts |
-| Data size | Any size, fast | Tiny messages only (RSA-2048 with OAEP-SHA256 fits at most 190 bytes) |
-| Integrity | Built in (AEAD) | Not for bulk data |
+| Key distribution | Both sides need the same secret key | Anyone with a recipient's authentic public key can encrypt a secret that only the corresponding private key can recover |
+| Data size | Efficient for files | Used here only for a short, fixed-size key payload |
+| Integrity | Authenticates ciphertext and AAD | The ECIES implementation protects its encrypted payload; file and metadata authentication are handled by AES-GCM |
 
-Sharing a file needs both properties: *distribute access without a prior shared secret* (public key) and *handle files of any size* (symmetric). Hybrid encryption uses each for what it does well: the public-key layer protects one small key, and the symmetric layer protects the data.
+Hybrid encryption lets us distribute access without sharing an AES key beforehand while encrypting the file only once. Each recipient receives a separate ECIES-encrypted copy of the same 32-byte file key.
 
-The code enforces this boundary: `envolver_clave()` in `vault/public_key.py` refuses anything that is not exactly 32 bytes, so a file can never be passed to RSA.
+The function `envolver_clave()` in `vault/public_key.py` accepts **exactly 32 bytes** as its file-key input. It constructs a 64-byte ECIES plaintext: a 32-byte SHA-256 context digest followed by the 32-byte AES file key. Files themselves are never passed to ECIES.
 
 ### Why symmetric encryption is still needed
 
-- RSA cannot encrypt a file: the OAEP message limit is far below any real document size.
-- RSA alone gives no integrity over the file or its metadata. AES-256-GCM authenticates the ciphertext and the AAD, which is what detects tampering (D2).
-- Encrypting the file once with a symmetric key keeps the container size roughly constant per recipient (one RSA block each), instead of one copy of the file per person.
+- AES-256-GCM efficiently encrypts file contents and authenticates the ciphertext and AAD.
+- ECIES is used only to protect the small file-key payload, not the file contents.
+- Encrypting the file once avoids storing a separate full ciphertext for every recipient. Each additional recipient adds one wrapped-key entry.
 
 ### Why per-recipient key encryption is required
 
-- Each person holds a different private key, and a ciphertext produced for one public key is unreadable with another. The same file key must therefore be wrapped separately for each recipient.
-- The file itself is not duplicated: adding a recipient adds one entry, not another copy of the data.
-- Each recipient only ever handles their own wrapped key. Nobody needs to receive a secret over another channel.
-- OAEP is randomized, so the wrapped keys of different recipients look unrelated even though they protect the same file key.
+- Each recipient has a distinct secp256k1 private/public key pair. An ECIES payload encrypted for one public key cannot normally be recovered with another private key.
+- The same AES file key is encrypted separately for each recipient, while the file ciphertext is shared.
+- ECIES encryption is randomized, so independent wrapped-key outputs differ even when protecting the same file key.
+- Each encrypted key also includes a protected context digest binding it to the file ID, public-key fingerprint and recipient ID.
 
 ---
 
-## 2. Container Format (version 2)
+## 2. Container Format (version 3)
 
 ```json
 {
   "header": {
     "nombre_archivo": "contrato.txt",
     "fecha": "2026-10-25T21:00:00+00:00",
-    "version": 2,
+    "version": 3,
     "algoritmo": "AES-256-GCM",
-    "algoritmo_envoltura": "RSA-OAEP-SHA256",
+    "algoritmo_envoltura": "ECIES-SECP256K1",
     "algoritmo_huella": "SHA256-SPKI-DER",
     "id_archivo": "<16 random bytes, base64>"
   },
   "recipients": [
     { "id": "alice", "key_id": "<sha256 hex>", "encrypted_key": "<base64>" },
-    { "id": "bob",   "key_id": "<sha256 hex>", "encrypted_key": "<base64>" }
+    { "id": "bob", "key_id": "<sha256 hex>", "encrypted_key": "<base64>" }
   ],
   "nonce": "<12 bytes, base64>",
   "ciphertext": "<base64>",
@@ -67,22 +67,32 @@ The code enforces this boundary: `envolver_clave()` in `vault/public_key.py` ref
 }
 ```
 
-The D2 password-based container (version 1) is unchanged and still supported by the existing modules.
+The D2 password-based container (version 1) is unchanged and remains supported by the existing D2 modules. The D3 sharing format is now version 3; previously generated version 2 RSA-OAEP containers are not automatically compatible with this ECIES format.
 
 ### What the AAD authenticates
 
-```
-AAD = "D3-VAULT-AAD-v2\n" || canonical_json({ header, recipients })
+```text
+AAD = "D3-VAULT-AAD-v3\n" || canonical_json({ header, recipients })
 ```
 
-`header` includes the format version, the content/key-wrap/fingerprint algorithm identifiers, the file name, the date and the random `id_archivo`. `recipients` includes every entry (`id`, `key_id`, `encrypted_key`) **in order**. The JSON is canonical (sorted keys, no whitespace), so the AAD is deterministic.
+`header` contains the format version, algorithm identifiers, file name, date and random `id_archivo`. `recipients` contains each entry (`id`, `key_id`, `encrypted_key`) **in order**. Canonical JSON (sorted keys, compact separators) makes AAD construction deterministic. AES-GCM detects unauthorized changes to these fields when the decryptor verifies the authentication tag.
+
+### How ECIES binds each encrypted key to its context
+
+For every recipient, `crear_etiqueta_envoltura()` builds a canonical JSON label with a domain-separation string (`D3-FILEKEY-ECIES-v1`), `id_archivo`, `key_id` and recipient ID. The sender calculates `SHA-256(label)` and encrypts the following payload using ECIES:
+
+```text
+ECIES plaintext = SHA-256(context label) || AES file key (32 bytes)
+```
+
+After ECIES decryption, `desenvolver_clave()` verifies that the payload is 64 bytes and compares the first 32 bytes to the expected context digest using a constant-time comparison. It returns the AES key only if the context matches. This is **not an RSA-OAEP label** or an ECIES library AAD parameter; it is an explicitly encrypted-and-checked context digest.
 
 ### Module layout
 
 | Module | Responsibility |
 |:---|:---|
-| `vault/public_key.py` | RSA key pairs, fingerprints, PEM import/export, RSA-OAEP wrap/unwrap |
-| `vault/shared_container.py` | v2 format, strict validation, AAD construction, read/write |
+| `vault/public_key.py` | secp256k1 key pairs, fingerprints, PEM import/export, ECIES wrap/unwrap and context verification |
+| `vault/shared_container.py` | v3 format, strict validation, AAD construction, read/write |
 | `vault/sharing.py` | High-level API: `cifrar_para_destinatarios`, `descifrar_como_destinatario` |
 
 ---
@@ -91,56 +101,57 @@ AAD = "D3-VAULT-AAD-v2\n" || canonical_json({ header, recipients })
 
 ### How do recipients identify their key?
 
-Each entry carries a `key_id`: the **SHA-256 of the DER SubjectPublicKeyInfo** encoding of the recipient's public key (full 256 bits, hex, not truncated).
+Each recipient entry contains a `key_id`: the **SHA-256 digest of the DER SubjectPublicKeyInfo** encoding of that recipient's public key (full 256 bits, hexadecimal).
 
-- **Deterministic:** the same public key always gives the same ID; different keys give different IDs (SHA-256 collision resistance).
-- **Derived, not declared:** when opening a file, the recipient's `key_id` is computed from the private key they present. The lookup never trusts a name typed by the user.
-- **No confusion:** the container is rejected if two entries share an `id` or a `key_id`, so a lookup has at most one match.
-- **Optional identity check:** if the caller passes `id_usuario`, the entry found must carry that `id`. Presenting Bob's key as "alice" fails.
-- **Identity is bound cryptographically:** the RSA-OAEP *label* of every wrapped key is `{file id, key_id, recipient id}`. Moving an entry to another container, or renaming its `id`, makes unwrapping fail.
+- **Deterministic:** the same public key produces the same `key_id`.
+- **Derived, not declared:** on opening a file, the system derives the fingerprint from the supplied private key's public key instead of trusting a typed name alone.
+- **No ambiguity:** duplicate recipient IDs or key IDs are rejected.
+- **Optional identity check:** if `id_usuario` is provided, it must match the selected recipient entry.
+- **Cryptographic context binding:** the ECIES-encrypted payload includes a digest of `{file ID, key_id, recipient ID}` and a fixed domain-separation string. Changing that context makes key recovery fail.
+
+A fingerprint identifies a key, but does **not** independently prove who owns it. Its authenticity must be checked using a trusted channel.
 
 ### What happens if an attacker modifies the recipient list?
 
-The whole list (with order, IDs, key IDs and wrapped keys) is part of the AAD of AES-GCM, so any change makes the authentication tag fail for **every** recipient, including recipients whose own entry was not touched. This holds against anyone who does not hold the file key (outsiders and non-recipients). A recipient does hold the file key, so see the limitations below.
+The full ordered recipient list, including wrapped keys, is authenticated as AES-GCM AAD. Unauthorized modifications make authentication fail for recipients who can otherwise recover the file key. Structural errors may be rejected even earlier by strict container validation. This guarantee assumes the attacker does not possess the AES file key.
 
 | Attack | Result |
 |:---|:---|
-| Add a recipient entry | `InvalidTag` |
-| Remove a recipient entry | The removed user has no entry (`DestinatarioNoAutorizado`); everyone else gets `InvalidTag` |
-| Reorder entries | `InvalidTag` |
-| Change an `id` or `key_id` | `InvalidTag` (or `ErrorDeAcceso` for the affected user, via the OAEP label) |
-| Modify or swap an `encrypted_key` | `InvalidTag` / `ErrorDeAcceso` |
-| Copy an entry from another container | `ErrorDeAcceso` (OAEP label includes the file ID) |
-| Change an algorithm identifier or version | `ContenedorInvalido` (strict validation); also part of the AAD (tested separately) |
-| Add unknown fields or duplicate JSON keys | `ContenedorInvalido` (strict parser) |
-| Re-encode Base64 non-canonically | `ContenedorInvalido` (only canonical Base64 is accepted) |
-| Look-alike recipient IDs (case, NFC/NFD, zero-width or bidi characters) | Rejected when encrypting and when validating a container |
+| Add a recipient entry | AES-GCM authentication fails (`InvalidTag`) |
+| Remove a recipient entry | Removed user loses their entry; other recipients fail AAD authentication |
+| Reorder entries | AES-GCM authentication fails (`InvalidTag`) |
+| Change an `id` or `key_id` | Context verification, lookup or AES-GCM authentication fails |
+| Modify or swap an `encrypted_key` | ECIES recovery or AES-GCM authentication fails |
+| Copy an entry from another container | ECIES context verification fails because the file ID differs |
+| Change an algorithm identifier or version | Strict validation rejects unsupported values (`ContenedorInvalido`) |
+| Add unknown fields or duplicate JSON keys | Strict parser rejects the container (`ContenedorInvalido`) |
+| Re-encode Base64 non-canonically | Strict validation rejects the container |
+| Use invalid or confusable recipient IDs | Rejected by recipient-ID validation |
 
-Note that OAEP wrapping happens *before* the AAD is computed, and the AAD includes the wrapped keys. This is not circular: the OAEP label depends only on the file ID, the key ID and the recipient ID.
+ECIES key wrapping occurs before the AAD is calculated. There is no circular dependency: each ECIES context digest depends on the file ID, key ID and recipient ID, while the final AES-GCM AAD also includes the resulting wrapped keys.
 
 ### What happens if the public key is wrong?
 
-- **A wrong key that is not the intended person's** (for example, Mallory's key registered under "bob"): the system cannot know it is wrong. The file is wrapped for whoever owns that key, so the wrong person gets access and the intended recipient does not.
-- **Mitigation implemented:** `verificar_huella()` compares a public key to a fingerprint obtained through a trusted channel (in person, a signed directory, etc.). Share only after the check passes.
-- **A weak or unsupported key** is rejected before use: non-RSA keys and RSA keys under 2048 bits raise `ValueError`. The default is 3072 bits.
-- **A recipient using a different private key** (for example after regenerating their key pair) has a different `key_id` and finds no entry.
+- **Wrong but valid public key:** if Mallory's secp256k1 public key is mistakenly registered as Bob's, the system cannot determine the true owner. Mallory may decrypt and Bob cannot. The caller must verify fingerprints through a trusted channel.
+- **Unsupported key type or curve:** RSA public keys and elliptic-curve public keys other than secp256k1 are rejected before use.
+- **Different private key:** a recipient who supplies a different private key has a different `key_id` and cannot find or decrypt the intended entry.
 
-A real deployment needs a trustworthy source of public keys (PKI, a verified key directory, or fingerprint pinning). This project provides the fingerprint check but not the directory.
+The project provides `verificar_huella()` for comparing a public key with a trusted fingerprint, but does not implement a PKI or verified key directory.
 
 ---
 
 ## 4. Known Limitations
 
-- **The origin of a container is not authenticated.** Public keys are public, so any outsider can build a brand-new, fully valid container with content and recipients of their choosing. D3 gives confidentiality against non-recipients and detects modification of an *existing* container by anyone who does not hold the file key. It does not prove who created it. Digital signatures would address this.
-- **Recipients are trusted with the file key.** A recipient can decrypt, can re-share the file key, and (because AES-GCM uses a shared key) can build a modified container with a valid tag. D3 does not authenticate recipients to each other.
-- **No key commitment.** AES-GCM does not commit to its key. A malicious *sender* could wrap different file keys for different recipients so that each decrypts a different valid plaintext. "All recipients see the same plaintext" is guaranteed only for honest senders; sender signatures or an explicit key-commitment value would fix this.
-- **Metadata is not confidential.** The recipient list, the `key_id` values (linkable across files for the same key) and the file name are stored in plaintext. They are authenticated, not hidden.
-- **The file name is untrusted data.** It can contain path separators or unusual characters. `abrir_archivo_compartido` never uses it as a path; any caller that does must sanitize it first.
-- **No revocation of past access.** Removing a recipient requires re-encrypting the file with a new file key and a new list. Anyone who already has the old file key and the old container can still read that copy.
-- **Changing the recipient list means re-encrypting.** Because the list is authenticated, adding or removing a recipient produces a new container.
-- **No public-key authenticity infrastructure** (see above).
-- **RSA is not post-quantum secure.**
-- **Private keys** are exported as password-encrypted PKCS#8 PEM. Storing and protecting them is the user's responsibility; `*.pem` and `*.key` are already ignored by Git.
+- **The sender is not authenticated.** Anyone with public keys can create a new valid container. D3 protects confidentiality against non-recipients and detects unauthorized modification of an existing container; it does not prove who created the file. Digital signatures would help authenticate its origin.
+- **Recipients know the file key.** An authorized recipient can decrypt, copy, re-share or potentially construct a modified container with a valid AES-GCM tag. The system does not prevent this.
+- **No explicit key commitment.** AES-GCM does not inherently commit to a unique key. A malicious sender could potentially distribute different file keys or contents to different recipients. This design does not provide a cryptographic proof that every recipient sees identical plaintext from a malicious sender.
+- **Metadata is not confidential.** File names, recipient IDs and public-key fingerprints are visible in the JSON container, although authenticated as AAD.
+- **File names are untrusted input.** Callers must sanitize file names before using them as filesystem paths.
+- **No retroactive revocation.** Removing a recipient requires creating a new container with a fresh file key; previously distributed copies and keys cannot be revoked.
+- **Recipient-list changes require re-encryption.** The list is authenticated by AES-GCM, so modifying it requires producing a valid new container.
+- **No public-key authenticity infrastructure.** Fingerprint verification requires a trustworthy out-of-band reference.
+- **ECIES (secp256k1) is not post-quantum secure.** Its elliptic-curve security is vulnerable to sufficiently capable quantum computers. Replacing RSA-OAEP with ECIES does not provide post-quantum protection.
+- **Private-key storage is the user's responsibility.** Private keys can be exported as password-encrypted PKCS#8 PEM. They must be stored and shared carefully; `.pem` and `.key` files should not be committed to Git.
 
 ---
 
@@ -154,6 +165,7 @@ A real deployment needs a trustworthy source of public keys (PKI, a verified key
 | Wrong private key fails | `test_clave_privada_incorrecta_falla`, `test_clave_privada_incorrecta_sobre_entrada_ajena`, `test_desenvolver_con_clave_privada_incorrecta` (`test_public_key.py`) |
 | Removing a recipient entry breaks access | `test_eliminar_una_entrada_de_destinatario_rompe_el_acceso` |
 | Key IDs deterministic | `test_huella_es_determinista` (`test_public_key.py`) |
-| Public key encryption only for small keys | `test_no_se_pueden_envolver_datos_grandes`, `test_archivo_grande_no_pasa_por_rsa` |
+| ECIES wraps only the short file key, not bulk file data | `test_no_se_pueden_envolver_datos_grandes` (`test_public_key.py`), `test_archivo_grande_no_pasa_por_ecies` |
 | Wrong public key | `test_clave_publica_equivocada_da_acceso_a_la_persona_equivocada` |
+| Unsupported key types and curves rejected | `test_rechaza_clave_publica_rsa`, `test_rechaza_curva_no_permitida` (`test_public_key.py`) |
 | Strict container validation | `tests/test_shared_container.py` |

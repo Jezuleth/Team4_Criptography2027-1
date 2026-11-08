@@ -43,7 +43,7 @@ def cifrar_para_destinatarios(
     """
     Cifra `datos` una sola vez y los comparte con varios destinatarios.
 
-    destinatarios: {id_usuario: clave_publica_RSA}
+    destinatarios: {id_usuario: clave_publica_ECIES}
 
     Devuelve el contenedor (diccionario JSON-serializable).
     """

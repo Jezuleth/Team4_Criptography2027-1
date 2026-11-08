@@ -58,26 +58,34 @@ def test_verificar_huella_detecta_clave_sustituida(alice, mallory):
         verificar_huella(mallory.public_key(), huella_de_alice)
 
 
-# Validación de claves
+# Validación de claves ECIES
 
-def test_rechaza_rsa_menor_a_2048_bits():
-    with pytest.raises(ValueError):
-        generar_par_claves(1024)
+def test_generar_claves_secp256k1():
+    clave_privada = generar_par_claves()
 
-
-def test_rechaza_clave_publica_rsa_debil():
-    clave_debil = rsa.generate_private_key(public_exponent=65537, key_size=1024)
-
-    with pytest.raises(ValueError):
-        validar_clave_publica(clave_debil.public_key())
+    assert isinstance(clave_privada, ec.EllipticCurvePrivateKey)
+    assert isinstance(clave_privada.curve, ec.SECP256K1)
 
 
-def test_rechaza_exponente_publico_distinto_de_65537(alice):
-    numeros = alice.public_key().public_numbers()
-    clave_e3 = rsa.RSAPublicNumbers(3, numeros.n).public_key()
+def test_rechaza_clave_publica_rsa():
+    clave_rsa = rsa.generate_private_key(
+        public_exponent=65537,
+        key_size=2048,
+    )
 
     with pytest.raises(ValueError):
-        validar_clave_publica(clave_e3)
+        validar_clave_publica(clave_rsa.public_key())
+
+
+def test_rechaza_curva_no_permitida():
+    clave_ec = ec.generate_private_key(ec.SECP256R1())
+
+    with pytest.raises(ValueError):
+        validar_clave_publica(clave_ec.public_key())
+
+
+def test_acepta_clave_publica_secp256k1(alice):
+    assert validar_clave_publica(alice.public_key()) == alice.public_key()
 
 
 def test_cargar_pem_sin_cifrar_con_contrasena(alice):
@@ -91,30 +99,6 @@ def test_cargar_pem_sin_cifrar_con_contrasena(alice):
 
     with pytest.raises(ValueError):
         cargar_clave_privada(pem_sin_cifrar, "cualquiera")
-
-
-def test_rechaza_clave_que_no_es_rsa():
-    clave_ec = ec.generate_private_key(ec.SECP256R1())
-
-    with pytest.raises(ValueError):
-        validar_clave_publica(clave_ec.public_key())
-
-
-def test_tamano_por_defecto_es_3072(monkeypatch):
-    capturado = {}
-    generar_original = rsa.generate_private_key
-
-    def falso_generar(public_exponent, key_size):
-        capturado["bits"] = key_size
-        # Se genera una clave pequeña para no tardar en la prueba
-        return generar_original(public_exponent, 2048)
-
-    monkeypatch.setattr(rsa, "generate_private_key", falso_generar)
-
-    generar_par_claves()
-
-    assert capturado["bits"] == 3072
-
 
 # Serialización de claves privadas
 
@@ -142,7 +126,7 @@ def test_exportar_clave_privada_sin_contrasena(alice):
         serializar_clave_privada(alice, "")
 
 
-# Envoltura RSA-OAEP
+# Envoltura ECIES
 
 def test_envolver_y_desenvolver(alice):
     clave = bytes(range(32))
@@ -162,7 +146,7 @@ def test_envoltura_es_probabilistica(alice):
 
 
 def test_no_se_pueden_envolver_datos_grandes(alice):
-    """RSA solo recibe claves simétricas de 32 bytes, nunca archivos."""
+    """ECIES solo protege claves AES de 32 bytes, nunca archivos completos."""
     with pytest.raises(ValueError):
         envolver_clave(b"A" * 100, alice.public_key(), ETIQUETA)
 

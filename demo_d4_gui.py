@@ -159,7 +159,7 @@ class VaultGUI(tk.Tk):
         self.etiqueta(
             cifrado_panel,
             "AES-256-GCM encrypts the document once. "
-            "RSA-OAEP protects its key for Alice and Bob.",
+            "ECIES (secp256k1) protects its key for Alice and Bob.",
             10,
             MUTED,
         ).pack(anchor="w", pady=7)

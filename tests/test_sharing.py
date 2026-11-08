@@ -112,7 +112,7 @@ def test_lista_de_destinatarios_alterada_hace_fallar_el_descifrado(
 
 
 def test_alterar_la_propia_entrada_hace_fallar_el_descifrado(contenedor, bob):
-    """Cambiar el id de la entrada de Bob rompe la etiqueta OAEP."""
+    """Cambiar el id de Bob invalida el contexto protegido con ECIES."""
     alterado = _copia(contenedor)
     alterado["recipients"][1]["id"] = "robert"
 
@@ -130,7 +130,7 @@ def test_clave_privada_incorrecta_falla(contenedor, alice, bob, mallory):
         descifrar_como_destinatario(contenedor, bob, id_usuario="alice")
 
     # Alice con un par de claves nuevo (no el que se usó al compartir)
-    alice_con_otra_clave = generar_par_claves(2048)
+    alice_con_otra_clave = generar_par_claves()
 
     with pytest.raises(DestinatarioNoAutorizado):
         descifrar_como_destinatario(contenedor, alice_con_otra_clave, "alice")
@@ -249,8 +249,8 @@ def test_archivo_vacio(alice, contenido):
     assert descifrar_como_destinatario(contenedor, alice) == b""
 
 
-def test_archivo_grande_no_pasa_por_rsa(alice, bob, tmp_path):
-    """RSA solo envuelve 32 bytes: el tamaño de la clave no depende del archivo."""
+def test_archivo_grande_no_pasa_por_ecies(alice, bob, tmp_path):
+    """ECIES protege solo la clave AES; no cifra directamente el archivo de 2 MiB."""
     origen = tmp_path / "grande.bin"
     datos = bytes(range(256)) * 8192  # 2 MiB
     origen.write_bytes(datos)
@@ -265,7 +265,7 @@ def test_archivo_grande_no_pasa_por_rsa(alice, bob, tmp_path):
     contenedor = json.loads(ruta.read_text(encoding="utf-8"))
 
     for entrada in contenedor["recipients"]:
-        assert len(base64.b64decode(entrada["encrypted_key"])) == 256
+        assert len(base64.b64decode(entrada["encrypted_key"])) == 161
 
     salida = tmp_path / "recuperado.bin"
     recuperado = abrir_archivo_compartido(ruta, bob, "bob", salida)
@@ -329,7 +329,7 @@ def test_cambiar_identificadores_de_algoritmo_es_rechazado(contenedor, alice):
 
 
 def test_entrada_de_otro_contenedor_no_sirve(alice, bob, contenido):
-    """La etiqueta OAEP ata cada clave envuelta a su archivo concreto."""
+    """El contexto cifrado con ECIES vincula cada clave a su archivo."""
     destinatarios = {"alice": alice.public_key(), "bob": bob.public_key()}
 
     c1 = cifrar_para_destinatarios(contenido, "x.txt", destinatarios)

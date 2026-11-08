@@ -25,7 +25,7 @@ The system uses **hybrid encryption**:
 
 1. Generate a random 256-bit **file key**.
 2. Encrypt the file once with **AES-256-GCM** (the AEAD from D2).
-3. Encrypt (wrap) the file key separately with each recipient's **RSA public key** using **RSA-OAEP (SHA-256)**.
+3. Encrypt (wrap) the file key separately with each recipient's ECIES public key (secp256k1).
 4. Store every wrapped key in the container, identified by the SHA-256 fingerprint of the recipient's public key.
 
 Public keys are only ever used on the 32-byte file key, never on the file itself.
@@ -35,20 +35,20 @@ Public keys are only ever used on the 32-byte file key, never on the file itself
 | Component | Implementation |
 |:---|:---|
 | File encryption | AES-256-GCM (AEAD) |
-| Key wrapping | RSA-OAEP, SHA-256 / MGF1-SHA-256 |
-| RSA key size | 3072 bits by default (minimum accepted: 2048) |
+| Key wrapping | ECIES (secp256k1) |
+| Elliptic curve | secp256k1 (256-bit private keys) |
 | Key identifier (`key_id`) | SHA-256 of the DER SubjectPublicKeyInfo of the public key |
-| OAEP label | File ID + `key_id` + recipient ID (binds each wrapped key to its context) |
+| ECIES context binding | SHA-256 of File ID + `key_id` + recipient ID, encrypted alongside the AES file key using ECIES |
 | AAD | Canonical JSON of the full header and the full ordered recipient list, with algorithm identifiers |
 | Private key storage | Password-encrypted PKCS#8 PEM |
-| Container | JSON `.vault`, format version 2 |
+| Container | JSON `.vault`, format version 3 |
 
 ### Container Format
 
 ```json
 {
-  "header": { "nombre_archivo": "...", "fecha": "...", "version": 2,
-              "algoritmo": "AES-256-GCM", "algoritmo_envoltura": "RSA-OAEP-SHA256",
+  "header": { "nombre_archivo": "...", "fecha": "...", "version": 3,
+            "algoritmo": "AES-256-GCM", "algoritmo_envoltura": "ECIES-SECP256K1",
               "algoritmo_huella": "SHA256-SPKI-DER", "id_archivo": "..." },
   "recipients": [
     { "id": "alice", "key_id": "<sha256 hex>", "encrypted_key": "<base64>" },
@@ -95,8 +95,8 @@ verificar_huella(bob.public_key(), huella_esperada)
 
 | Module | Responsibility |
 |:---|:---|
-| `vault/public_key.py` | RSA key pairs, fingerprints, PEM import/export, RSA-OAEP wrap/unwrap. |
-| `vault/shared_container.py` | Version 2 container format, strict validation, AAD construction. |
+| `vault/public_key.py` | ECIES (secp256k1) key pairs, fingerprints, PEM import/export, ECIES wrap/unwrap. |
+| `vault/shared_container.py` | Version 3 container format, strict validation, AAD construction. |
 | `vault/sharing.py` | Multi-recipient encryption and recipient-based decryption. |
 
 The D2 modules are unchanged; version 1 (password) containers continue to work.
@@ -168,19 +168,19 @@ If authentication fails, the decryption operation is rejected.
 
 ### Requirements
 
-- Python 3
+- Python 3.12 or newer
 - cryptography
 - pytest
-
+- eciespy
 Install the dependencies:
 
 ```bash
-python -m pip install cryptography pytest
+python -m pip install -r requirements.txt
 ```
 
 ## Testing
 
-The project includes 165 automated tests implemented with Pytest (30 from D2 and 135 from D3).
+The project includes 164 automated tests implemented with Pytest, covering D2 and D3.
 
 Run all tests from the project root directory:
 
@@ -196,11 +196,10 @@ python -m pytest -v
 | D2 | Key Management | 9 | Passed |
 | D2 | Container | 8 | Passed |
 | D2 | Decryption | 7 | Passed |
-| D3 | Public Keys (`test_public_key.py`) | 20 | Passed |
+| D3 | Public Keys (`test_public_key.py`) | 19 | Passed |
 | D3 | Shared Container (`test_shared_container.py`) | 77 | Passed |
 | D3 | Sharing (`test_sharing.py`) | 38 | Passed |
-| | **Total** | **165** | **Passed** |
-
+| | **Total** | **164** | **Passed** |
 ### Security Validation
 
 The D2 implementation includes tests for:
@@ -218,11 +217,10 @@ The D3 implementation adds tests proving that:
 3. A tampered recipient list (added, renamed, reordered or modified entries) makes decryption fail.
 4. A wrong private key fails.
 5. Removing a recipient entry breaks access.
-6. Public keys are only used on the 32-byte file key, and weak or non-RSA keys are rejected.
+6. ECIES public keys are used to protect the 32-byte AES file key, and RSA keys or unsupported elliptic curves are rejected.
 7. Malformed containers (unknown or duplicate fields, non-canonical Base64, look-alike recipient IDs) are rejected with a single error type.
 
-**Result: 165 tests passed successfully.**
-
+**Result: 164 tests passed successfully.**
 ---
 
 ## Security Considerations
@@ -296,7 +294,7 @@ python demo_d4_gui.py
 ### Demonstration scenarios
 
 1. **Select Document:** Choose a local file to encrypt.
-2. **Encrypt & Share:** Encrypt the document once using AES-256-GCM and protect its file key separately for Alice and Bob using RSA-OAEP.
+2. **Encrypt & Share:** Encrypt the document once using AES-256-GCM and protect its file key separately for Alice and Bob using ECIES (secp256k1).
 3. **Authorized Decryption:** Alice and Bob can decrypt the container using their corresponding private keys.
 4. **Unauthorized Access:** Mallory attempts to decrypt the same container and is denied access.
 5. **Tampering Detection:** Modify a byte of a copy of the encrypted container and verify that AES-GCM rejects the modified ciphertext.
