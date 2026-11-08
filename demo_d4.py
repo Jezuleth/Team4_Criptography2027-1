@@ -23,7 +23,7 @@ vault = carpeta / "mensaje.vault"
 print("\n=== D4 - SECURE DIGITAL DOCUMENT VAULT ===")
 
 # 1. Generar claves para tres usuarios
-print("\n[1] Generando claves RSA...")
+print("\n[1] Generando claves ECIES (secp256k1)...")
 alice = generar_par_claves()
 bob = generar_par_claves()
 mallory = generar_par_claves()

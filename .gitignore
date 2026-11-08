@@ -17,3 +17,5 @@ __pycache__/
 
 # Archivos generados durante pruebas
 evidencias_d2/
+# D4 demonstration generated files
+demo_d4_archivos/

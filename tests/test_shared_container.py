@@ -25,9 +25,9 @@ def test_estructura_del_contenedor(contenedor):
 def test_encabezado_incluye_identificadores_de_algoritmo(contenedor):
     encabezado = contenedor["header"]
 
-    assert encabezado["version"] == 2
+    assert encabezado["version"] == 3
     assert encabezado["algoritmo"] == "AES-256-GCM"
-    assert encabezado["algoritmo_envoltura"] == "RSA-OAEP-SHA256"
+    assert encabezado["algoritmo_envoltura"] == "ECIES-SECP256K1"
     assert encabezado["algoritmo_huella"] == "SHA256-SPKI-DER"
 
 
@@ -191,7 +191,7 @@ def test_base64_no_canonico_es_rechazado(contenedor):
 
 
 @pytest.mark.parametrize("version", [2.0, True, "2", None])
-def test_version_debe_ser_el_entero_2(contenedor, version):
+def test_version_debe_ser_el_entero_3(contenedor, version):
     alterado = copy.deepcopy(contenedor)
     alterado["header"]["version"] = version
 

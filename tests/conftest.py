@@ -7,23 +7,23 @@ from vault.sharing import cifrar_para_destinatarios
 @pytest.fixture(scope="session")
 def alice():
     # 2048 bits es el mínimo permitido; acelera las pruebas.
-    return generar_par_claves(2048)
+    return generar_par_claves()
 
 
 @pytest.fixture(scope="session")
 def bob():
-    return generar_par_claves(2048)
+    return generar_par_claves()
 
 
 @pytest.fixture(scope="session")
 def carol():
-    return generar_par_claves(2048)
+    return generar_par_claves()
 
 
 @pytest.fixture(scope="session")
 def mallory():
     """Usuario NO autorizado: nunca se agrega como destinatario."""
-    return generar_par_claves(2048)
+    return generar_par_claves()
 
 
 @pytest.fixture

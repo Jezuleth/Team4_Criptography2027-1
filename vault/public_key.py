@@ -1,33 +1,20 @@
-"""
-Gestión de claves públicas para el cifrado híbrido (D3).
-
-Este módulo SOLO maneja claves asimétricas pequeñas:
-  - generación de pares RSA,
-  - huella (fingerprint) que identifica cada clave pública,
-  - serialización PEM,
-  - envoltura (wrap) / desenvoltura (unwrap) de la clave simétrica del
-    archivo con RSA-OAEP.
-
-Nunca se cifra un archivo con una clave pública. Lo único que entra a
-RSA-OAEP es la clave de archivo de 32 bytes.
-"""
-
 import hashlib
 import json
 
-from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import padding, rsa
+import hmac
+
+from ecies import encrypt as ecies_encrypt, decrypt as ecies_decrypt
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import ec
 
 # Identificadores de algoritmo (quedan autenticados en el AAD del contenedor)
-ALGORITMO_ENVOLTURA = "RSA-OAEP-SHA256"
+ALGORITMO_ENVOLTURA = "ECIES-SECP256K1"
 ALGORITMO_HUELLA = "SHA256-SPKI-DER"
 
-TAMANO_MINIMO_RSA = 2048
-TAMANO_RSA_POR_DEFECTO = 3072
 TAMANO_CLAVE_ARCHIVO = 32
+CURVA_ECIES = ec.SECP256K1()
 
-_ETIQUETA_BASE = "D3-FILEKEY-WRAP-v1"
-
+_ETIQUETA_BASE = "D3-FILEKEY-ECIES-v1"
 
 class ErrorDeAcceso(Exception):
     """Base de los errores por falta de acceso a un contenedor compartido."""
@@ -39,34 +26,23 @@ class DestinatarioNoAutorizado(ErrorDeAcceso):
 
 # Generación y validación de claves
 
-def generar_par_claves(bits: int = TAMANO_RSA_POR_DEFECTO) -> rsa.RSAPrivateKey:
+def generar_par_claves() -> ec.EllipticCurvePrivateKey:
     """
-    Genera un par de claves RSA. Devuelve la clave privada
-    (la pública se obtiene con .public_key()).
+    Genera un par de claves de curva elíptica secp256k1.
+    La clave pública se obtiene con .public_key().
     """
-    if bits < TAMANO_MINIMO_RSA:
-        raise ValueError(
-            f"El tamaño mínimo de clave RSA es {TAMANO_MINIMO_RSA} bits."
-        )
-
-    return rsa.generate_private_key(public_exponent=65537, key_size=bits)
+    return ec.generate_private_key(CURVA_ECIES)
 
 
-def validar_clave_publica(clave_publica) -> rsa.RSAPublicKey:
+def validar_clave_publica(clave_publica) -> ec.EllipticCurvePublicKey:
     """
-    Verifica que la clave sea RSA y de tamaño aceptable.
-    Rechaza otros tipos de clave y claves débiles.
+    Verifica que la clave pública sea EC y utilice secp256k1.
     """
-    if not isinstance(clave_publica, rsa.RSAPublicKey):
-        raise ValueError("La clave pública debe ser RSA.")
+    if not isinstance(clave_publica, ec.EllipticCurvePublicKey):
+        raise ValueError("La clave pública debe ser de curva elíptica.")
 
-    if clave_publica.key_size < TAMANO_MINIMO_RSA:
-        raise ValueError(
-            f"Clave RSA demasiado pequeña (mínimo {TAMANO_MINIMO_RSA} bits)."
-        )
-
-    if clave_publica.public_numbers().e != 65537:
-        raise ValueError("Exponente público RSA no soportado (se requiere 65537).")
+    if not isinstance(clave_publica.curve, ec.SECP256K1):
+        raise ValueError("Solo se admite la curva secp256k1.")
 
     return clave_publica
 
@@ -117,7 +93,7 @@ def serializar_clave_publica(clave_publica) -> bytes:
     )
 
 
-def cargar_clave_publica(pem: bytes) -> rsa.RSAPublicKey:
+def cargar_clave_publica(pem: bytes) -> ec.EllipticCurvePublicKey:
     clave = serialization.load_pem_public_key(pem)
     return validar_clave_publica(clave)
 
@@ -136,24 +112,25 @@ def serializar_clave_privada(clave_privada, contraseña: str) -> bytes:
     )
 
 
-def cargar_clave_privada(pem: bytes, contraseña: str) -> rsa.RSAPrivateKey:
+def cargar_clave_privada(pem: bytes, contraseña: str) -> ec.EllipticCurvePrivateKey:
     try:
         clave = serialization.load_pem_private_key(
             pem,
             password=contraseña.encode("utf-8"),
         )
     except TypeError as error:
-        # PEM sin cifrar cargado con contraseña
-        raise ValueError("La clave privada no está cifrada con contraseña.") from error
+        raise ValueError(
+            "La clave privada no está cifrada con contraseña."
+        ) from error
 
-    if not isinstance(clave, rsa.RSAPrivateKey):
-        raise ValueError("La clave privada debe ser RSA.")
+    if not isinstance(clave, ec.EllipticCurvePrivateKey):
+        raise ValueError("La clave privada debe ser de curva elíptica.")
 
     validar_clave_publica(clave.public_key())
     return clave
 
 
-# Envoltura de la clave de archivo con RSA-OAEP
+# Envoltura de la clave de archivo con ECIES (secp256k1)
 
 def crear_etiqueta_envoltura(
     id_archivo: str,
@@ -161,11 +138,17 @@ def crear_etiqueta_envoltura(
     id_destinatario: str,
 ) -> bytes:
     """
-    Etiqueta OAEP (label) que ata la clave envuelta a su contexto:
-    este archivo, esta clave pública y este identificador de usuario.
+    Construye una etiqueta de contexto para proteger la clave AES
+    mediante ECIES (secp256k1).
 
-    OAEP autentica la etiqueta al desenvolver, así que una entrada copiada
-    a otro contenedor, o reasignada a otra identidad, falla al descifrar.
+    La etiqueta identifica el archivo, la huella de la clave pública
+    y el destinatario.
+
+    Su hash SHA-256 se incluye dentro del mensaje cifrado con ECIES
+    y se verifica al descifrar.
+
+    Esto impide reutilizar una clave envuelta en otro archivo
+    o asociarla a un destinatario diferente sin detectar el cambio.
     """
     return json.dumps(
         {
@@ -180,21 +163,12 @@ def crear_etiqueta_envoltura(
     ).encode("utf-8")
 
 
-def _padding_oaep(etiqueta: bytes) -> padding.OAEP:
-    return padding.OAEP(
-        mgf=padding.MGF1(algorithm=hashes.SHA256()),
-        algorithm=hashes.SHA256(),
-        label=etiqueta,
-    )
-
-
 def envolver_clave(clave_archivo: bytes, clave_publica, etiqueta: bytes) -> bytes:
     """
-    Cifra la clave de archivo (32 bytes) con la clave pública del
-    destinatario usando RSA-OAEP (SHA-256).
+    Protege la clave AES-256 mediante ECIES con secp256k1.
 
-    OAEP es probabilístico: envolver la misma clave dos veces produce
-    resultados distintos.
+    Incluye un hash del contexto para vincular la clave cifrada
+    al archivo y al destinatario correspondientes.
     """
     if len(clave_archivo) != TAMANO_CLAVE_ARCHIVO:
         raise ValueError(
@@ -203,7 +177,15 @@ def envolver_clave(clave_archivo: bytes, clave_publica, etiqueta: bytes) -> byte
 
     validar_clave_publica(clave_publica)
 
-    return clave_publica.encrypt(clave_archivo, _padding_oaep(etiqueta))
+    clave_publica_hex = clave_publica.public_bytes(
+        encoding=serialization.Encoding.X962,
+        format=serialization.PublicFormat.UncompressedPoint,
+    ).hex()
+
+    contexto = hashlib.sha256(etiqueta).digest()
+    mensaje = contexto + clave_archivo
+
+    return ecies_encrypt(clave_publica_hex, mensaje)
 
 
 def desenvolver_clave(
@@ -212,23 +194,34 @@ def desenvolver_clave(
     etiqueta: bytes,
 ) -> bytes:
     """
-    Recupera la clave de archivo con la clave privada del destinatario.
+    Recupera la clave AES utilizando ECIES.
 
-    Cualquier fallo (clave privada equivocada, etiqueta distinta, datos
-    alterados) se reporta con un único error genérico, sin dar detalles
-    que sirvan como oráculo.
+    Rechaza claves incorrectas, datos alterados o contextos
+    que no coincidan con el archivo y destinatario originales.
     """
     try:
-        clave_archivo = clave_privada.decrypt(
-            clave_envuelta,
-            _padding_oaep(etiqueta),
-        )
-    except ValueError as error:
+        if not isinstance(clave_privada, ec.EllipticCurvePrivateKey):
+            raise ValueError("Clave privada inválida.")
+
+        validar_clave_publica(clave_privada.public_key())
+
+        clave_privada_hex = clave_privada.private_numbers().private_value.to_bytes(
+            32, "big"
+        ).hex()
+
+        mensaje = ecies_decrypt(clave_privada_hex, clave_envuelta)
+
+        contexto_esperado = hashlib.sha256(etiqueta).digest()
+
+        if (
+            len(mensaje) != 64
+            or not hmac.compare_digest(mensaje[:32], contexto_esperado)
+        ):
+            raise ValueError("Contexto de cifrado inválido.")
+
+        return mensaje[32:]
+
+    except (ValueError, TypeError) as error:
         raise ErrorDeAcceso(
             "No se pudo recuperar la clave del archivo."
         ) from error
-
-    if len(clave_archivo) != TAMANO_CLAVE_ARCHIVO:
-        raise ErrorDeAcceso("No se pudo recuperar la clave del archivo.")
-
-    return clave_archivo

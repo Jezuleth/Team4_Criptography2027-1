@@ -7,7 +7,7 @@ Estructura del archivo .vault:
   "header": {
     "nombre_archivo", "fecha", "version": 2,
     "algoritmo": "AES-256-GCM",
-    "algoritmo_envoltura": "RSA-OAEP-SHA256",
+    "algoritmo_envoltura": "ECIES-SECP256K1",,
     "algoritmo_huella": "SHA256-SPKI-DER",
     "id_archivo": <16 bytes aleatorios, base64>
   },
@@ -36,17 +36,17 @@ from pathlib import Path
 
 from vault.public_key import ALGORITMO_ENVOLTURA, ALGORITMO_HUELLA
 
-VERSION_COMPARTIDO = 2
+VERSION_COMPARTIDO = 3
 ALGORITMO_CONTENIDO = "AES-256-GCM"
 
 TAMANO_NONCE = 12
 TAMANO_TAG = 16
 TAMANO_ID_ARCHIVO = 16
-TAMANO_MINIMO_CLAVE_ENVUELTA = 256  # RSA-2048 -> 256 bytes
+TAMANO_MINIMO_CLAVE_ENVUELTA = 97  # Mínimo estructural estimado para ECIES
 MAX_DESTINATARIOS = 256
 MAX_LONGITUD_ID = 128
 
-_PREFIJO_AAD = b"D3-VAULT-AAD-v2\n"
+_PREFIJO_AAD = b"D3-VAULT-AAD-v3\n"
 _CATEGORIAS_PROHIBIDAS = {"Cc", "Cf", "Cs", "Co", "Cn", "Zl", "Zp"}
 _REGEX_HUELLA = re.compile(r"[0-9a-f]{64}")
 
