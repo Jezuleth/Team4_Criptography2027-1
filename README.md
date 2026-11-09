@@ -13,10 +13,56 @@ The project focuses on protecting digital documents through modern cryptographic
 | Deliverable | Description |
 |:---|:---|
 | [D2](#d2--secure-symmetric-encryption-module) | Password-protected AES-256-GCM encryption for a single owner. |
-| [D3](#d3--hybrid-encryption-and-secure-file-sharing) | Hybrid encryption: one encrypted file shared with multiple recipients. |
+| [D3](#d3--hybrid-encryption-and-secure-file-sharing) | Hybrid encryption: one encrypted file shared with multiple recipients using ECIES. |
 | [D4](#d4--midterm-system-presentation--security-review) | Interactive security demonstration and system review using Tkinter. |
+| [D5](#d5--digital-signatures) | Origin authentication and integrity verification using Ed25519 digital signatures. |
 
 ---
+
+## D5 | Digital Signatures
+
+D5 extends the system to guarantee origin authentication and integrity by implementing digital signatures.
+
+Up to D3, the system provided Confidentiality (encryption) and Access control (you decide who to share). But it does NOT give a guarantee of who created the file or whether the sender is authentic.
+
+Without signatures:
+- Anyone can re-encrypt content and claim ownership.
+- Recipients cannot trust the origin.
+
+### How It Works: Hash → Sign → Verify
+
+1. **Digital Signature Generation**
+The system computes a hash of the data to be signed and signs that hash using the sender's private key (Ed25519).
+
+2. **Signature Verification**
+Before decrypting or processing a file, the system verifies the signature using the sender's public key. It rejects the file if verification fails.
+
+3. **Define What Is Signed**
+To prevent attackers from modifying metadata, changing the recipient list, and context manipulation attacks, the signature explicitly includes:
+- Ciphertext
+- All security-relevant metadata (same as AAD)
+
+4. **Integration with Existing System**
+The signature covers the output from D2 (encrypted content) and structure from D3 (recipients, metadata). 
+The system follows this flow: `Encrypt → Add metadata → Sign → Store`
+
+### Signature Storage
+
+The container now includes the signature and signer identity:
+
+```json
+{
+  "header": { "nombre_archivo": "...", "version": 3, "id_archivo": "..." },
+  "recipients": [ ... ],
+  "nonce": "...",
+  "ciphertext": "...",
+  "tag": "...",
+  "signature": "<base64_encoded_signature>",
+  "signer_id": "<key_fingerprint>"
+}
+
+---
+
 ## D4 | Midterm System Presentation & Security Review
 
 D4 integrates the previous deliverables into an interactive security demonstration of the Secure Digital Document Vault.
