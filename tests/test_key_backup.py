@@ -3,16 +3,29 @@
 
 import pytest
 
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import ec
+
 from vault.key_backup import (
     ErrorBackup,
     crear_backup,
     restaurar_backup,
     verificar_backup,
 )
-from vault.key_lifecycle import (
-    crear_identidad_protegida,
-    abrir_identidad,
+from vault.key_lifecycle import GestorCicloVida
+from vault.keystore import (
+    proteger_clave_privada,
+    recuperar_clave_privada,
+    guardar_keystore,
+    cargar_keystore,
 )
+
+
+def abrir_identidad(ruta, password):
+    """Recupera una clave privada desde un keystore cifrado."""
+    almacen = cargar_keystore(ruta)
+    datos = recuperar_clave_privada(almacen, password)
+    return serialization.load_der_private_key(datos, password=None)
 
 
 @pytest.fixture
@@ -20,9 +33,19 @@ def identidad(tmp_path):
     ruta = tmp_path / "alice.keystore"
     password = "PasswordSeguro123!"
 
-    crear_identidad_protegida(
-        "firma", password, ruta
+    gestor = GestorCicloVida()
+    privada, registro = gestor.generar_clave("alice")
+
+    datos = privada.private_bytes(
+        encoding=serialization.Encoding.DER,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.NoEncryption(),
     )
+
+    almacen = proteger_clave_privada(
+        datos, password, registro.fingerprint
+    )
+    guardar_keystore(ruta, almacen)
 
     return ruta, password
 
@@ -48,18 +71,11 @@ def test_restaurar_backup(identidad, tmp_path):
     assert restaurado.exists()
 
     privada_original = abrir_identidad(origen, password)
-    privada_restaurada = abrir_identidad(
-        restaurado, password
-    )
+    privada_restaurada = abrir_identidad(restaurado, password)
 
     assert (
         privada_original.public_key().public_numbers()
         == privada_restaurada.public_key().public_numbers()
-    ) if hasattr(
-        privada_original.public_key(), "public_numbers"
-    ) else (
-        privada_original.public_key().public_bytes_raw()
-        == privada_restaurada.public_key().public_bytes_raw()
     )
 
 
@@ -109,9 +125,11 @@ def test_integracion_firma_despues_de_restaurar(
     privada = abrir_identidad(restaurado, password)
 
     mensaje = b"Documento protegido D5-D6"
-    firma = privada.sign(mensaje)
+    firma = privada.sign(mensaje, ec.ECDSA(hashes.SHA256()))
 
-    privada.public_key().verify(firma, mensaje)
+    privada.public_key().verify(
+        firma, mensaje, ec.ECDSA(hashes.SHA256())
+    )
 
 
 def test_restauracion_rechaza_password_incorrecto(
