@@ -140,3 +140,71 @@ def test_formato_no_compatible(almacen):
         recuperar_clave_privada(
             alterado, "PasswordSeguro123!"
         )
+
+@pytest.mark.parametrize("password", [
+    "",
+    "123456",
+    "password1234",
+    "123456789012",
+    "abc",
+])
+def test_rechazar_password_debil(password):
+    with pytest.raises(ErrorKeystore):
+        proteger_clave_privada(
+            b"CLAVE_PRIVADA_DE_PRUEBA",
+            password,
+            "alice",
+        )
+@pytest.mark.parametrize("campo,valor", [
+    ("n", 2**16),
+    ("r", 16),
+    ("p", 2),
+    ("length", 64),
+])
+def test_manipulacion_parametros_scrypt(campo, valor):
+    keystore = proteger_clave_privada(
+        b"CLAVE_PRIVADA_DE_PRUEBA",
+        "PasswordSegura123!",
+        "alice",
+    )
+
+    keystore["kdf_params"][campo] = valor
+
+    with pytest.raises(ErrorKeystore):
+        recuperar_clave_privada(
+            keystore,
+            "PasswordSegura123!",
+        )
+def test_compatibilidad_keystore_v1():
+    import os
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    from vault.keystore import _derivar_clave, _b64
+
+    password = "PasswordSegura123!"
+    key_id = "alice"
+    clave_privada = b"CLAVE_PRIVADA_V1"
+
+    salt = os.urandom(16)
+    nonce = os.urandom(12)
+    clave_aes = _derivar_clave(password, salt, n=2**14)
+
+    aad = f"D6-KEYSTORE-v1:{key_id}".encode("utf-8")
+    cifrado = AESGCM(clave_aes).encrypt(
+        nonce, clave_privada, aad
+    )
+
+    keystore_v1 = {
+        "version": 1,
+        "algorithm": "AES-256-GCM",
+        "kdf": "scrypt",
+        "key_id": key_id,
+        "salt": _b64(salt),
+        "nonce": _b64(nonce),
+        "ciphertext": _b64(cifrado),
+    }
+
+    recuperada = recuperar_clave_privada(
+        keystore_v1, password
+    )
+
+    assert recuperada == clave_privada

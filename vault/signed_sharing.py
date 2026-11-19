@@ -134,13 +134,29 @@ def descifrar_contenedor_firmado(
     clave_privada,
     id_usuario: str,
     clave_publica_firmante: Ed25519PublicKey,
+    gestor_claves=None,
 ) -> bytes:
-    """Verifica la firma y SOLO si es válida descifra con D3.
+    """Verifica firma, estado de clave y descifra con D3."""
 
-    Con firma inválida no se usa la clave privada ni se intenta descifrar.
-    """
-    interno = verificar_contenedor_firmado(contenedor, clave_publica_firmante)
-    return descifrar_como_destinatario(interno, clave_privada, id_usuario)
+    # 1. Verificar la firma digital.
+    interno = verificar_contenedor_firmado(
+        contenedor,
+        clave_publica_firmante,
+    )
+
+    # 2. Aplicar política de revocación de D6.
+    if gestor_claves is not None:
+        gestor_claves.validar_clave_para_uso(
+            id_usuario,
+            clave_privada,
+        )
+
+    # 3. Descifrar únicamente si las validaciones pasan.
+    return descifrar_como_destinatario(
+        interno,
+        clave_privada,
+        id_usuario,
+    )
 
 
 # --------------------------------------------------------------------------
@@ -170,15 +186,19 @@ def abrir_archivo_firmado(
     id_usuario: str,
     clave_publica_firmante: Ed25519PublicKey,
     ruta_salida=None,
+    gestor_claves=None,
 ) -> bytes:
-    """Leer -> verificar firma -> descifrar. Mismo patrón que
-    `abrir_archivo_compartido`, con verificación previa obligatoria."""
+    """Verifica firma y revocación antes de descifrar."""
+
     datos = descifrar_contenedor_firmado(
         _leer_json_estricto(ruta_vault),
         clave_privada,
         id_usuario,
         clave_publica_firmante,
+        gestor_claves=gestor_claves,
     )
+
     if ruta_salida is not None:
         Path(ruta_salida).write_bytes(datos)
+
     return datos
