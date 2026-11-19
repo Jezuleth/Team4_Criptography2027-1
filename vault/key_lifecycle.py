@@ -14,7 +14,12 @@ se delegará al módulo keystore.py.
 """
 
 from __future__ import annotations
+import json
+import os
+from pathlib import Path
 
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
 import hashlib
 import threading
 from dataclasses import dataclass
@@ -48,12 +53,149 @@ class GestorCicloVida:
     debe realizarse mediante keystore.py.
     """
 
-    def __init__(self):
+    def __init__(self, ruta_estado=None, password_estado=None):
         self._registros = {}
         self._claves_activas = {}
         self._versiones = {}
+        self._historial_claves = {}
         self._lock = threading.RLock()
 
+        self._ruta_estado = (
+            Path(ruta_estado) if ruta_estado is not None else None
+        )
+        self._password_estado = password_estado
+
+        if self._ruta_estado is not None:
+            if (
+                not isinstance(password_estado, str)
+                or len(password_estado) < 12
+            ):
+                raise ErrorCicloVida(
+                    "Se requiere una contraseña de al menos 12 caracteres "
+                    "para proteger el historial."
+                )
+
+            if self._ruta_estado.exists():
+                self._cargar_estado()
+
+    def _guardar_estado(self):
+        """Guarda el historial cifrado y autenticado."""
+        if self._ruta_estado is None:
+            return
+
+        registros = {
+            usuario: vars(registro).copy()
+            for usuario, registro in self._registros.items()
+        }
+
+        datos = json.dumps(
+            {
+                "registros": registros,
+                "versiones": self._versiones,
+                "historial": self._historial_claves,
+            },
+            sort_keys=True,
+        ).encode("utf-8")
+
+        salt = os.urandom(16)
+        nonce = os.urandom(12)
+
+        clave = Scrypt(
+            salt=salt,
+            length=32,
+            n=2**14,
+            r=8,
+            p=1,
+        ).derive(self._password_estado.encode("utf-8"))
+
+        cifrado = AESGCM(clave).encrypt(
+            nonce, datos, b"D6-LIFECYCLE-v1"
+        )
+
+        import base64
+
+        contenido = {
+            "version": 1,
+            "salt": base64.b64encode(salt).decode("ascii"),
+            "nonce": base64.b64encode(nonce).decode("ascii"),
+            "ciphertext": base64.b64encode(cifrado).decode("ascii"),
+        }
+
+        self._ruta_estado.parent.mkdir(
+            parents=True, exist_ok=True
+        )
+
+        temporal = self._ruta_estado.with_name(
+            self._ruta_estado.name + ".tmp"
+        )
+
+        try:
+            with open(temporal, "x", encoding="utf-8") as archivo:
+                json.dump(contenido, archivo, indent=2)
+
+            os.replace(temporal, self._ruta_estado)
+        finally:
+            temporal.unlink(missing_ok=True)
+
+    def _cargar_estado(self):
+        """Recupera el historial al reiniciar."""
+        import base64
+
+        try:
+            with open(self._ruta_estado, "r", encoding="utf-8") as archivo:
+                contenido = json.load(archivo)
+
+            if contenido["version"] != 1:
+                raise ErrorCicloVida("Versión de historial incompatible.")
+
+            salt = base64.b64decode(
+                contenido["salt"], validate=True
+            )
+            nonce = base64.b64decode(
+                contenido["nonce"], validate=True
+            )
+            cifrado = base64.b64decode(
+                contenido["ciphertext"], validate=True
+            )
+
+            if len(salt) != 16 or len(nonce) != 12:
+                raise ErrorCicloVida("Parámetros inválidos.")
+
+            clave = Scrypt(
+                salt=salt,
+                length=32,
+                n=2**14,
+                r=8,
+                p=1,
+            ).derive(self._password_estado.encode("utf-8"))
+
+            datos = AESGCM(clave).decrypt(
+                nonce, cifrado, b"D6-LIFECYCLE-v1"
+            )
+
+            estado = json.loads(datos)
+
+            registros = {
+                usuario: RegistroClave(**registro)
+                for usuario, registro in estado["registros"].items()
+            }
+            versiones = estado["versiones"]
+
+            if not isinstance(versiones, dict):
+                raise ValueError("Versiones inválidas.")
+
+            self._registros = registros
+            self._versiones = versiones
+            self._historial_claves = estado.get("historial_claves", {})
+
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            raise ErrorCicloVida(
+                "No se pudo recuperar el historial."
+            ) from exc
+        except Exception as exc:
+            raise ErrorCicloVida(
+                "Contraseña incorrecta o historial alterado."
+            ) from exc
     @staticmethod
     def _fingerprint(clave_publica) -> str:
         der = clave_publica.public_bytes(
@@ -89,6 +231,7 @@ class GestorCicloVida:
             self._registros[usuario] = registro
             self._claves_activas[usuario] = clave
             self._versiones[usuario] = version
+            self._guardar_estado()
 
             return clave, registro
 
@@ -139,6 +282,7 @@ class GestorCicloVida:
             registro.motivo_revocacion = motivo
 
             self._claves_activas.pop(usuario, None)
+            self._guardar_estado()
 
     def obtener_registro(self, usuario: str):
         """Consulta los metadatos de la clave sin revelar la privada."""
@@ -160,6 +304,68 @@ class GestorCicloVida:
 
     def descargar_clave_de_memoria(self, usuario: str):
         """Elimina la referencia a la clave privada en memoria."""
-
         with self._lock:
             self._claves_activas.pop(usuario, None)
+
+    def validar_clave_para_uso(self, usuario, clave_privada):
+        """Autoriza únicamente la clave activa registrada."""
+        with self._lock:
+            registro = self._registros.get(usuario)
+
+            if registro is None:
+                raise ErrorCicloVida(
+                    "El usuario no tiene una clave registrada."
+                )
+
+            if registro.estado != "activa":
+                raise ErrorCicloVida(
+                    "La clave está revocada o no está activa."
+                )
+
+            fingerprint = self._fingerprint(
+                clave_privada.public_key()
+            )
+
+            if fingerprint != registro.fingerprint:
+                raise ErrorCicloVida(
+                    "La clave no coincide con la identidad activa."
+                )
+
+            return True
+
+
+    def registrar_clave_existente(self, usuario, clave_privada):
+        """Registra una clave ECIES existente sin generar otra."""
+        from cryptography.hazmat.primitives.asymmetric import ec
+
+        if not isinstance(usuario, str) or not usuario.strip():
+            raise ErrorCicloVida("Usuario inválido.")
+
+        if not isinstance(clave_privada, ec.EllipticCurvePrivateKey):
+            raise ErrorCicloVida("Clave privada inválida.")
+
+        if not isinstance(clave_privada.curve, ec.SECP256K1):
+            raise ErrorCicloVida("Solo se admite secp256k1.")
+
+        with self._lock:
+            if usuario in self._registros:
+                raise ErrorCicloVida(
+                    "El usuario ya tiene una identidad registrada."
+                )
+
+            fingerprint = self._fingerprint(clave_privada.public_key())
+
+            registro = RegistroClave(
+                usuario=usuario,
+                fingerprint=fingerprint,
+                version=1,
+                creada=datetime.now(timezone.utc).isoformat(),
+            )
+
+            self._registros[usuario] = registro
+            self._claves_activas[usuario] = clave_privada
+            self._versiones[usuario] = 1
+
+            self._guardar_estado()
+
+            return self.obtener_registro(usuario)

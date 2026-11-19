@@ -145,3 +145,91 @@ def test_restauracion_rechaza_password_incorrecto(
         restaurar_backup(backup, destino, "incorrecta")
 
     assert not destino.exists()
+
+def test_backup_corrupto_no_se_restaura(tmp_path):
+    from vault.keystore import (
+        proteger_clave_privada,
+        guardar_keystore,
+    )
+    from vault.key_backup import (
+        crear_backup,
+        restaurar_backup,
+        verificar_backup,
+        ErrorBackup,
+    )
+
+    origen = tmp_path / "original.json"
+    respaldo = tmp_path / "respaldo.json"
+    destino = tmp_path / "restaurado.json"
+
+    password = "PasswordSegura123!"
+
+    keystore = proteger_clave_privada(
+        b"CLAVE_PRIVADA_DE_PRUEBA",
+        password,
+        "alice",
+    )
+
+    guardar_keystore(origen, keystore)
+    crear_backup(origen, respaldo, password)
+
+    # Corromper el respaldo.
+    respaldo.write_text(
+        '{"version": 2, "ciphertext": "CORRUPTO"}',
+        encoding="utf-8",
+    )
+
+    # La verificación debe detectar el problema.
+    assert verificar_backup(respaldo, password) is False
+
+    # No debe permitir restaurar el respaldo.
+    with pytest.raises(ErrorBackup):
+        restaurar_backup(respaldo, destino, password)
+
+    # No debe crearse ningún archivo de destino.
+    assert not destino.exists()
+def test_backup_ciphertext_manipulado(tmp_path):
+    import json
+
+    origen = tmp_path / "original.json"
+    respaldo = tmp_path / "respaldo.json"
+    destino = tmp_path / "restaurado.json"
+
+    password = "PasswordSegura123!"
+
+    keystore = proteger_clave_privada(
+        b"CLAVE_PRIVADA_DE_PRUEBA",
+        password,
+        "alice",
+    )
+
+    guardar_keystore(origen, keystore)
+    crear_backup(origen, respaldo, password)
+
+    contenido = json.loads(
+        respaldo.read_text(encoding="utf-8")
+    )
+
+    # Alterar el ciphertext sin romper el formato Base64.
+    import base64
+
+    cifrado = bytearray(
+        base64.b64decode(contenido["ciphertext"])
+    )
+    cifrado[0] ^= 1
+
+    contenido["ciphertext"] = base64.b64encode(
+        cifrado
+    ).decode("ascii")
+
+    respaldo.write_text(
+        json.dumps(contenido),
+        encoding="utf-8",
+    )
+
+    assert verificar_backup(respaldo, password) is False
+
+    with pytest.raises(ErrorBackup):
+        restaurar_backup(respaldo, destino, password)
+
+    assert not destino.exists()

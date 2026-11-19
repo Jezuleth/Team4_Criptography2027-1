@@ -7,7 +7,7 @@ import copy
 import json
 
 import pytest
-
+from vault.key_lifecycle import GestorCicloVida, ErrorCicloVida
 from vault import signed_sharing
 from vault.public_key import DestinatarioNoAutorizado
 from vault.shared_container import ContenedorInvalido
@@ -238,3 +238,110 @@ def test_disco_archivo_malformado(vault_en_disco, firmante, contenido_malo):
 def test_disco_archivo_inexistente(tmp_path, firmante):
     with pytest.raises(ErrorFirma):
         verificar_archivo_firmado(tmp_path / "no_existe.vault", firmante.public_key())
+
+# ---- D6: Integración de revocación con descifrado firmado ----
+
+def test_d6_clave_activa_puede_descifrar(firmante):
+    gestor = GestorCicloVida()
+    clave, _ = gestor.generar_clave("alice")
+
+    contenido = b"Documento confidencial D6"
+
+    firmado = cifrar_y_firmar(
+        contenido,
+        "documento.txt",
+        {"alice": clave.public_key()},
+        firmante,
+    )
+
+    recuperado = descifrar_contenedor_firmado(
+        firmado,
+        clave,
+        "alice",
+        firmante.public_key(),
+        gestor_claves=gestor,
+    )
+
+    assert recuperado == contenido
+
+
+def test_d6_clave_revocada_no_puede_descifrar(firmante):
+    gestor = GestorCicloVida()
+    clave, _ = gestor.generar_clave("alice")
+
+    firmado = cifrar_y_firmar(
+        b"Documento confidencial",
+        "documento.txt",
+        {"alice": clave.public_key()},
+        firmante,
+    )
+
+    gestor.revocar_clave("alice", "Clave comprometida")
+
+    with pytest.raises(ErrorCicloVida):
+        descifrar_contenedor_firmado(
+            firmado,
+            clave,
+            "alice",
+            firmante.public_key(),
+            gestor_claves=gestor,
+        )
+
+
+def test_d6_clave_rotada_no_puede_descifrar(firmante):
+    gestor = GestorCicloVida()
+    clave_anterior, _ = gestor.generar_clave("alice")
+
+    firmado = cifrar_y_firmar(
+        b"Documento anterior",
+        "documento.txt",
+        {"alice": clave_anterior.public_key()},
+        firmante,
+    )
+
+    gestor.rotar_clave("alice")
+
+    with pytest.raises(ErrorCicloVida):
+        descifrar_contenedor_firmado(
+            firmado,
+            clave_anterior,
+            "alice",
+            firmante.public_key(),
+            gestor_claves=gestor,
+        )
+def test_d6_revocacion_persistente_bloquea_descifrado(
+    tmp_path, firmante
+):
+    ruta = tmp_path / "estado_claves.json"
+    password = "PasswordSegura123!"
+
+    gestor = GestorCicloVida(
+        ruta_estado=ruta,
+        password_estado=password,
+    )
+
+    clave, _ = gestor.generar_clave("alice")
+
+    firmado = cifrar_y_firmar(
+        b"Documento confidencial",
+        "documento.txt",
+        {"alice": clave.public_key()},
+        firmante,
+    )
+
+    gestor.revocar_clave("alice", "Clave comprometida")
+
+    # Simulamos reiniciar la aplicación.
+    nuevo_gestor = GestorCicloVida(
+        ruta_estado=ruta,
+        password_estado=password,
+    )
+
+    with pytest.raises(ErrorCicloVida):
+        descifrar_contenedor_firmado(
+            firmado,
+            clave,
+            "alice",
+            firmante.public_key(),
+            gestor_claves=nuevo_gestor,
+        )
