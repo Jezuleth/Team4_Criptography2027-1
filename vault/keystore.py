@@ -1,5 +1,4 @@
-
-"""D6: almacén cifrado de claves privadas."""
+"""D6: almacén cifrado de claves privadas (repositorio de llaves en disco)."""
 
 import base64
 import json
@@ -212,6 +211,8 @@ def guardar_keystore(ruta, keystore):
 
     with os.fdopen(descriptor, "wb") as archivo:
         archivo.write(datos)
+        archivo.flush()
+        os.fsync(archivo.fileno())
 
 
 def cargar_keystore(ruta):

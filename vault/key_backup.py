@@ -1,7 +1,6 @@
 
 """D6: respaldo y recuperación de almacenes de claves."""
 
-import json
 import os
 from pathlib import Path
 

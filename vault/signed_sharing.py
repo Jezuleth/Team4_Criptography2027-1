@@ -1,7 +1,9 @@
 """D5 - Integración de firmas digitales (Ed25519) con D2/D3.
 
     Cifrar (D2) -> Metadatos + destinatarios ECIES (D3) -> FIRMAR -> Guardar
-    Leer -> VERIFICAR FIRMA -> (solo si es válida) validar formato -> descifrar
+    Leer -> 1. FIRMA completa y válida -> 2. LLAVE con hash completo
+         -> 3. formato D3 -> 4. firmante no revocado (D6)
+         -> 5. clave del destinatario activa (D6) -> 6. descifrar
 
 El contenedor firmado es el contenedor v3 de D3 más tres campos de nivel
 superior: signer_id, signature_algorithm y signature. D2/D3 no se modifican:
@@ -9,15 +11,15 @@ antes de llamar a D3 se quitan esos tres campos (D3 rechaza campos extra).
 Por eso D3 NO puede abrir un contenedor firmado directamente, y un atacante
 que borre la firma no logra que se salte la verificación.
 
-IMPORTANTE: la aplicación debe abrir los .vault con `abrir_archivo_firmado`.
-Llamar a `abrir_archivo_compartido` sobre un contenedor sin firma omite la
-verificación de origen.
+IMPORTANTE: el sistema integrado (app.py, demo_final.py) abre los .vault
+SOLO con `abrir_archivo_firmado` / `descifrar_contenedor_firmado`: un archivo
+sin firma se rechaza siempre. `abrir_archivo_compartido` (D3) queda como
+primitiva interna de las pruebas y demos históricas de D3/D4.
 """
 
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -26,6 +28,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import (
     Ed25519PublicKey,
 )
 
+from vault.persistencia import escribir_atomico
 from vault.shared_container import validar_contenedor
 from vault.sharing import cifrar_para_destinatarios, descifrar_como_destinatario
 from vault.signatures import (
@@ -43,6 +46,7 @@ __all__ = [
     "firmar_y_compartir_archivo",
     "verificar_archivo_firmado",
     "abrir_archivo_firmado",
+    "leer_contenedor",
 ]
 
 
@@ -62,8 +66,11 @@ def _constante_invalida(nombre):
     raise ValueError(f"constante JSON no permitida: {nombre}")
 
 
-def _leer_json_estricto(ruta) -> dict:
-    """JSON sin claves duplicadas ni NaN/Infinity. Todo error -> ErrorFirma."""
+def leer_contenedor(ruta) -> dict:
+    """JSON sin claves duplicadas ni NaN/Infinity. Todo error -> ErrorFirma.
+
+    Solo lee: NO verifica la firma (eso lo hace verificar_contenedor_firmado).
+    """
     try:
         datos = json.loads(
             Path(ruta).read_text(encoding="utf-8"),
@@ -78,19 +85,11 @@ def _leer_json_estricto(ruta) -> dict:
 
 
 def _guardar_json_atomico(contenedor: Mapping[str, Any], ruta) -> None:
-    destino = Path(ruta)
-    temporal = destino.with_name(destino.name + ".tmp")
-    temporal.write_text(
-        json.dumps(
-            contenedor,
-            sort_keys=True,
-            indent=2,
-            ensure_ascii=False,
-            allow_nan=False,
-        ),
-        encoding="utf-8",
-    )
-    os.replace(temporal, destino)
+    datos = json.dumps(
+        contenedor, sort_keys=True, indent=2, ensure_ascii=False, allow_nan=False
+    ).encode("utf-8")
+    # El .vault va cifrado y firmado: está pensado para compartirse (0644).
+    escribir_atomico(ruta, datos, modo=0o644)
 
 
 # --------------------------------------------------------------------------
@@ -123,9 +122,9 @@ def verificar_contenedor_firmado(
 ) -> dict:
     """Verifica la firma y devuelve el contenedor v3 interno (sin campos de
     firma), ya validado por D3. Lanza ErrorFirma si la firma no es válida."""
-    verificar_contenedor(contenedor, clave_publica_firmante)  # 1) firma
+    verificar_contenedor(contenedor, clave_publica_firmante)  # 1-2) firma, llave
     interno = {k: v for k, v in contenedor.items() if k not in CAMPOS_FIRMA}
-    validar_contenedor(interno)                               # 2) formato D3
+    validar_contenedor(interno)                               # 3) formato D3
     return interno
 
 
@@ -136,7 +135,7 @@ def descifrar_contenedor_firmado(
     clave_publica_firmante: Ed25519PublicKey,
     gestor_claves,
 ) -> bytes:
-    """Verifica firma, estado de clave y descifra con D3.
+    """Verifica firma, estado de las claves y solo entonces descifra con D3.
 
     `gestor_claves` es obligatorio: sin él no habría forma de rechazar una
     clave revocada, y una revocación que se puede omitir no revoca nada.
@@ -144,24 +143,17 @@ def descifrar_contenedor_firmado(
     if gestor_claves is None:
         raise ValueError("Se requiere un gestor de claves para validar la revocación.")
 
-    # 1. Verificar la firma digital.
-    interno = verificar_contenedor_firmado(
-        contenedor,
-        clave_publica_firmante,
-    )
+    # 1-3. Firma completa y válida -> llave con hash completo -> formato D3.
+    interno = verificar_contenedor_firmado(contenedor, clave_publica_firmante)
 
-    # 2. Aplicar política de revocación de D6 (estado persistido en disco).
-    gestor_claves.validar_clave_para_uso(
-        id_usuario,
-        clave_privada,
-    )
+    # 4. La llave de firma del remitente no debe estar revocada (D6).
+    gestor_claves.validar_firmante(contenedor["signer_id"])
 
-    # 3. Descifrar únicamente si las validaciones pasan.
-    return descifrar_como_destinatario(
-        interno,
-        clave_privada,
-        id_usuario,
-    )
+    # 5. La clave del destinatario debe ser la activa registrada (D6).
+    gestor_claves.validar_clave_para_uso(id_usuario, clave_privada)
+
+    # 6. Descifrar únicamente si todas las validaciones pasan.
+    return descifrar_como_destinatario(interno, clave_privada, id_usuario)
 
 
 # --------------------------------------------------------------------------
@@ -181,7 +173,7 @@ def verificar_archivo_firmado(
     ruta_vault, clave_publica_firmante: Ed25519PublicKey
 ) -> dict:
     return verificar_contenedor_firmado(
-        _leer_json_estricto(ruta_vault), clave_publica_firmante
+        leer_contenedor(ruta_vault), clave_publica_firmante
     )
 
 
@@ -196,14 +188,14 @@ def abrir_archivo_firmado(
     """Verifica firma y revocación antes de descifrar."""
 
     datos = descifrar_contenedor_firmado(
-        _leer_json_estricto(ruta_vault),
+        leer_contenedor(ruta_vault),
         clave_privada,
         id_usuario,
         clave_publica_firmante,
         gestor_claves=gestor_claves,
     )
 
-    if ruta_salida is not None:
-        Path(ruta_salida).write_bytes(datos)
+    if ruta_salida is not None:  # solo se escribe tras pasar TODAS las verificaciones
+        escribir_atomico(ruta_salida, datos, modo=0o600)
 
     return datos
