@@ -8,10 +8,12 @@ from pathlib import Path
 from tkinter import ttk, filedialog, messagebox, simpledialog
 
 from vault.integrated_vault import (
+    ARCHIVO_ECIES,
     recuperar_identidad,
     enviar_archivo,
     recibir_archivo,
     registrar_identidad_en_gestor,
+    revocar_identidad,
 )
 from vault.key_lifecycle import GestorCicloVida, ErrorCicloVida
 
@@ -50,9 +52,6 @@ class VaultDemo:
             ruta_estado=BASE / "historial_claves.enc",
             password_estado=password_estado,
         )
-        
-
-        
 
         frame = ttk.Frame(root, padding=18)
         frame.pack(fill="both", expand=True)
@@ -268,6 +267,12 @@ class VaultDemo:
         if usuario in self.identidades:
             return self.identidades[usuario]
 
+        if not (BASE / usuario / ARCHIVO_ECIES).exists():
+            raise ValueError(
+                f"La clave de {usuario} no está en el repositorio de claves "
+                "(fue revocada y eliminada)."
+            )
+
         password = simpledialog.askstring(
             "Desbloquear identidad",
             f"Contraseña de {usuario}:",
@@ -321,15 +326,27 @@ class VaultDemo:
             ):
                 return
 
-            self.gestor.revocar_clave(
+            eliminada = revocar_identidad(
                 "bob",
+                BASE / "bob",
+                self.gestor,
                 "Revocación solicitada durante la demostración D6",
             )
 
+            # La clave privada no debe seguir viva en memoria de la app.
+            self.identidades.pop("bob", None)
+            self.passwords.pop("bob", None)
+
             self.log(
                 "\n[D6 - REVOCACIÓN]\n"
-                "La clave de Bob fue revocada.\n"
-                "El sistema bloqueará su uso para descifrar.",
+                "La clave de Bob fue revocada y guardada en disco "
+                "(persiste al reiniciar).\n"
+                + (
+                    "Se eliminó del repositorio de claves.\n"
+                    if eliminada
+                    else "Ya no estaba en el repositorio de claves.\n"
+                )
+                + "El sistema bloqueará su uso para descifrar.",
                 "error",
             )
 

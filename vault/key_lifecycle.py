@@ -14,8 +14,10 @@ se delegará al módulo keystore.py.
 """
 
 from __future__ import annotations
+import base64
 import json
 import os
+import tempfile
 from pathlib import Path
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -88,11 +90,11 @@ class GestorCicloVida:
             for usuario, registro in self._registros.items()
         }
 
-        datos = json.dumps(
+        estado = json.dumps(
             {
                 "registros": registros,
                 "versiones": self._versiones,
-                "historial": self._historial_claves,
+                "historial_claves": self._historial_claves,
             },
             sort_keys=True,
         ).encode("utf-8")
@@ -109,10 +111,8 @@ class GestorCicloVida:
         ).derive(self._password_estado.encode("utf-8"))
 
         cifrado = AESGCM(clave).encrypt(
-            nonce, datos, b"D6-LIFECYCLE-v1"
+            nonce, estado, b"D6-LIFECYCLE-v1"
         )
-
-        import base64
 
         contenido = {
             "version": 1,
@@ -121,26 +121,36 @@ class GestorCicloVida:
             "ciphertext": base64.b64encode(cifrado).decode("ascii"),
         }
 
-        self._ruta_estado.parent.mkdir(
-            parents=True, exist_ok=True
-        )
+        self._ruta_estado.parent.mkdir(parents=True, exist_ok=True)
+        self._escribir_duradero(json.dumps(contenido, indent=2).encode("utf-8"))
 
-        temporal = self._ruta_estado.with_name(
-            self._ruta_estado.name + ".tmp"
+    def _escribir_duradero(self, datos: bytes) -> None:
+        """Escritura persistente en disco: temporal 0600 -> fsync ->
+        os.replace atómico -> fsync del directorio. Si algo falla no queda
+        un archivo a medias ni un temporal huérfano."""
+        directorio = self._ruta_estado.parent
+        descriptor, temporal = tempfile.mkstemp(
+            dir=directorio, prefix=self._ruta_estado.name + ".", suffix=".tmp"
         )
-
         try:
-            with open(temporal, "x", encoding="utf-8") as archivo:
-                json.dump(contenido, archivo, indent=2)
-
+            with os.fdopen(descriptor, "wb") as archivo:
+                archivo.write(datos)
+                archivo.flush()
+                os.fsync(archivo.fileno())
             os.replace(temporal, self._ruta_estado)
-        finally:
-            temporal.unlink(missing_ok=True)
+        except BaseException:
+            Path(temporal).unlink(missing_ok=True)
+            raise
+
+        if os.name == "posix":  # persistir también la entrada del directorio
+            fd_dir = os.open(directorio, os.O_RDONLY)
+            try:
+                os.fsync(fd_dir)
+            finally:
+                os.close(fd_dir)
 
     def _cargar_estado(self):
         """Recupera el historial al reiniciar."""
-        import base64
-
         try:
             with open(self._ruta_estado, "r", encoding="utf-8") as archivo:
                 contenido = json.load(archivo)
@@ -282,7 +292,16 @@ class GestorCicloVida:
             registro.motivo_revocacion = motivo
 
             self._claves_activas.pop(usuario, None)
-            self._guardar_estado()
+
+            # La revocación queda activa en memoria aunque el disco falle
+            # (falla cerrado), pero se avisa: sin disco no sería persistente.
+            try:
+                self._guardar_estado()
+            except OSError as exc:
+                raise ErrorCicloVida(
+                    "La clave quedó revocada en memoria, pero no se pudo "
+                    "guardar la revocación en disco."
+                ) from exc
 
     def obtener_registro(self, usuario: str):
         """Consulta los metadatos de la clave sin revelar la privada."""
@@ -336,8 +355,6 @@ class GestorCicloVida:
 
     def registrar_clave_existente(self, usuario, clave_privada):
         """Registra una clave ECIES existente sin generar otra."""
-        from cryptography.hazmat.primitives.asymmetric import ec
-
         if not isinstance(usuario, str) or not usuario.strip():
             raise ErrorCicloVida("Usuario inválido.")
 

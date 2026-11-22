@@ -42,9 +42,17 @@ def _cambiar_texto(s):
     return s[:-2] + ("A" if s[-2] != "A" else "B") + s[-1]
 
 
+def _gestor_activo(nombre, clave):
+    """Gestor en memoria con `clave` registrada y activa para `nombre`."""
+    gestor = GestorCicloVida()
+    gestor.registrar_clave_existente(nombre, clave)
+    return gestor
+
+
 def _abrir(contenedor, usuario, nombre, firmante):
     return descifrar_contenedor_firmado(
-        contenedor, usuario, nombre, firmante.public_key()
+        contenedor, usuario, nombre, firmante.public_key(),
+        _gestor_activo(nombre, usuario),
     )
 
 
@@ -69,7 +77,8 @@ def test_3_metadatos_modificados_rechazados(firmado, alice, firmante):
 def test_4_clave_publica_incorrecta_rechazada(firmado, alice):
     with pytest.raises(ErrorFirma):
         descifrar_contenedor_firmado(
-            firmado, alice, "alice", generar_par_claves_firma().public_key()
+            firmado, alice, "alice", generar_par_claves_firma().public_key(),
+            _gestor_activo("alice", alice),
         )
 
 
@@ -194,7 +203,8 @@ def vault_en_disco(tmp_path, alice, bob, firmante, contenido):
 def test_disco_ida_y_vuelta(vault_en_disco, bob, firmante, contenido, tmp_path):
     salida = tmp_path / "recuperado.txt"
     datos = abrir_archivo_firmado(
-        vault_en_disco, bob, "bob", firmante.public_key(), ruta_salida=salida
+        vault_en_disco, bob, "bob", firmante.public_key(),
+        _gestor_activo("bob", bob), ruta_salida=salida,
     )
     assert datos == contenido == salida.read_bytes()
 
@@ -210,7 +220,10 @@ def test_disco_modificado_en_bytes(vault_en_disco, alice, firmante):
     d["ciphertext"] = _cambiar_texto(d["ciphertext"])
     vault_en_disco.write_text(json.dumps(d), encoding="utf-8")
     with pytest.raises(ErrorFirma):
-        abrir_archivo_firmado(vault_en_disco, alice, "alice", firmante.public_key())
+        abrir_archivo_firmado(
+            vault_en_disco, alice, "alice", firmante.public_key(),
+            _gestor_activo("alice", alice),
+        )
 
 
 def test_disco_firma_eliminada(vault_en_disco, alice, firmante):
@@ -218,7 +231,10 @@ def test_disco_firma_eliminada(vault_en_disco, alice, firmante):
     del d["signature"], d["signer_id"], d["signature_algorithm"]
     vault_en_disco.write_text(json.dumps(d), encoding="utf-8")
     with pytest.raises(ErrorFirma):
-        abrir_archivo_firmado(vault_en_disco, alice, "alice", firmante.public_key())
+        abrir_archivo_firmado(
+            vault_en_disco, alice, "alice", firmante.public_key(),
+            _gestor_activo("alice", alice),
+        )
 
 
 def test_disco_claves_json_duplicadas(vault_en_disco, firmante):

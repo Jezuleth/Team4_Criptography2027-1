@@ -2,6 +2,7 @@
 import json
 from pathlib import Path
 
+from vault.key_lifecycle import GestorCicloVida
 from vault.public_key import DestinatarioNoAutorizado, generar_par_claves
 from vault.signatures import ErrorFirma, generar_par_claves_firma, huella_clave_firma
 from vault.signed_sharing import abrir_archivo_firmado, firmar_y_compartir_archivo
@@ -19,6 +20,11 @@ alice, bob, mallory = generar_par_claves(), generar_par_claves(), generar_par_cl
 signer = generar_par_claves_firma()  # Ed25519, the sender's signing key
 impostor = generar_par_claves_firma()
 signer_pub = signer.public_key()
+
+# D6: el descifrado exige un gestor que confirme que la clave sigue activa.
+gestor = GestorCicloVida()
+for name, key in [("alice", alice), ("bob", bob), ("mallory", mallory)]:
+    gestor.registrar_clave_existente(name, key)
 print(f"Signer fingerprint: {huella_clave_firma(signer_pub)}")
 
 print("\n[2] Encrypting for Alice and Bob, then signing...")
@@ -30,14 +36,14 @@ print("OK: signed message.vault created.")
 
 print("\n[3] Authorized recipients verify the signature and decrypt...")
 for name, key in [("alice", alice), ("bob", bob)]:
-    data = abrir_archivo_firmado(vault, key, name, signer_pub)
+    data = abrir_archivo_firmado(vault, key, name, signer_pub, gestor)
     assert data == message
     print(f"OK: {name} verified the signature and recovered the file.")
 
 
 def must_fail(label, exc, path, key, name, pub):
     try:
-        abrir_archivo_firmado(path, key, name, pub)
+        abrir_archivo_firmado(path, key, name, pub, gestor)
     except exc:
         print(f"OK: {label}")
     else:

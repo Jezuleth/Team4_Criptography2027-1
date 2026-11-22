@@ -7,6 +7,7 @@ from cryptography.hazmat.primitives import serialization
 
 from vault.keystore import (
     cargar_keystore,
+    eliminar_keystore,
     guardar_keystore,
     proteger_clave_privada,
     recuperar_clave_privada,
@@ -14,6 +15,7 @@ from vault.keystore import (
 from vault.public_key import (
     generar_par_claves,
     validar_clave_publica,
+    verificar_huella,
 )
 from vault.signed_sharing import (
     abrir_archivo_firmado,
@@ -23,6 +25,11 @@ from vault.signatures import (
     generar_par_claves_firma,
     huella_clave_firma,
 )
+
+
+# Repositorio de claves: un archivo por clave dentro de la carpeta de la identidad.
+ARCHIVO_ECIES = "ecies.keystore"
+ARCHIVO_FIRMA = "firma.keystore"
 
 
 def _serializar_privada(clave):
@@ -73,8 +80,8 @@ def crear_identidad(usuario, password, carpeta):
     carpeta = Path(carpeta)
     carpeta.mkdir(parents=True, exist_ok=True)
 
-    ruta_ecies = carpeta / "ecies.keystore"
-    ruta_firma = carpeta / "firma.keystore"
+    ruta_ecies = carpeta / ARCHIVO_ECIES
+    ruta_firma = carpeta / ARCHIVO_FIRMA
 
     if ruta_ecies.exists() or ruta_firma.exists():
         raise FileExistsError("La identidad ya tiene archivos de claves.")
@@ -111,10 +118,10 @@ def recuperar_identidad(password, carpeta):
 
     return {
         "clave_ecies": _recuperar_privada(
-            carpeta / "ecies.keystore", password, "ecies"
+            carpeta / ARCHIVO_ECIES, password, "ecies"
         ),
         "clave_firma": _recuperar_privada(
-            carpeta / "firma.keystore", password, "firma"
+            carpeta / ARCHIVO_FIRMA, password, "firma"
         ),
     }
 
@@ -187,25 +194,20 @@ def registrar_identidad_en_gestor(
     )
 
 
-    with gestor_claves._lock:
-        if usuario in gestor_claves._registros:
-            raise ValueError("El usuario ya tiene una identidad registrada.")
+def revocar_identidad(usuario, carpeta, gestor_claves, motivo):
+    """Revoca la clave ECIES de forma persistente y la retira del repositorio.
 
-        fingerprint = gestor_claves._fingerprint(clave.public_key())
+    Orden (falla cerrado):
+      1. Registrar la revocación en disco (historial cifrado, con fsync).
+      2. Eliminar el keystore ECIES del repositorio de claves.
+    Si el paso 2 fallara, la clave ya está revocada y el uso queda bloqueado.
+    Devuelve True si el keystore existía y fue eliminado.
 
-        registro = RegistroClave(
-            usuario=usuario,
-            fingerprint=fingerprint,
-            version=1,
-            creada=datetime.now(timezone.utc).isoformat(),
-        )
+    Los respaldos (key_backup) son copias aparte: deben borrarse por separado.
+    """
+    gestor_claves.revocar_clave(usuario, motivo)
+    return eliminar_keystore(Path(carpeta) / ARCHIVO_ECIES)
 
-        gestor_claves._registros[usuario] = registro
-        gestor_claves._claves_activas[usuario] = clave
-        gestor_claves._versiones[usuario] = 1
-        gestor_claves._guardar_estado()
-
-    return registro
 
 def enviar_archivo_verificado(
     ruta_origen,
@@ -216,8 +218,6 @@ def enviar_archivo_verificado(
     password_remitente,
 ):
     """Verifica las identidades antes de cifrar y firmar."""
-    from vault.public_key import verificar_huella
-
     if not destinatarios:
         raise ValueError("Debe existir al menos un destinatario.")
 
