@@ -1,4 +1,3 @@
-from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from vault.key_management import recuperar_clave

@@ -19,3 +19,10 @@ __pycache__/
 evidencias_d2/
 # D4 demonstration generated files
 demo_d4_archivos/
+# Identidades, keystores e historial de claves de la app (NUNCA subir a git)
+identidades_demo/
+demo_d5_archivos/
+# Repositorio de llaves y salidas de la demo final (NUNCA subir a git)
+*.keystore
+historial_claves.enc
+demo_final_archivos/

@@ -1,421 +1,351 @@
-
 # Secure Digital Document Vault
-### Cryptography · Team 4 · UNAM · 2027-1
+### Cryptography · Team 4 · Faculty of Engineering, UNAM · 2027-1
 
-Secure Digital Document Vault is an academic project developed for the Cryptography course at the Faculty of Engineering, UNAM.
+**English** · [Español](README.md)
 
-The project focuses on protecting digital documents through modern cryptographic techniques.
+A document vault that protects files with **authenticated encryption (AES-256-GCM)**, shares
+them with multiple recipients using **elliptic-curve cryptography (ECIES secp256k1)**,
+guarantees their origin with **digital signatures (Ed25519)**, and manages the **key
+lifecycle** (registration, rotation and persistent revocation).
 
----
-
-## Deliverables
-
-| Deliverable | Description |
-|:---|:---|
-| [D2](#d2--secure-symmetric-encryption-module) | Password-protected AES-256-GCM encryption for a single owner. |
-| [D3](#d3--hybrid-encryption-and-secure-file-sharing) | Hybrid encryption: one encrypted file shared with multiple recipients using ECIES. |
-| [D4](#d4--midterm-system-presentation--security-review) | Interactive security demonstration and system review using Tkinter. |
-| [D5](#d5--digital-signatures) | Origin authentication and integrity verification using Ed25519 digital signatures. |
+This version **integrates the whole system** into a single application (`app.py`) and a final
+console demo (`demo_final.py`), both built on the same library (`vault/`).
 
 ---
 
-## D5 | Digital Signatures
+## Contents
 
-D5 extends the system to guarantee origin authentication and integrity by implementing digital signatures.
-
-Up to D3, the system provided Confidentiality (encryption) and Access control (you decide who to share). But it does NOT give a guarantee of who created the file or whether the sender is authentic.
-
-Without signatures:
-- Anyone can re-encrypt content and claim ownership.
-- Recipients cannot trust the origin.
-
-### How It Works: Hash → Sign → Verify
-
-1. **Digital Signature Generation**
-The system computes a hash of the data to be signed and signs that hash using the sender's private key (Ed25519).
-
-2. **Signature Verification**
-Before decrypting or processing a file, the system verifies the signature using the sender's public key. It rejects the file if verification fails.
-
-3. **Define What Is Signed**
-To prevent attackers from modifying metadata, changing the recipient list, and context manipulation attacks, the signature explicitly includes:
-- Ciphertext
-- All security-relevant metadata (same as AAD)
-
-4. **Integration with Existing System**
-The signature covers the output from D2 (encrypted content) and structure from D3 (recipients, metadata). 
-The system follows this flow: `Encrypt → Add metadata → Sign → Store`
-
-### Signature Storage
-
-The container now includes the signature and signer identity:
-
-```json
-{
-  "header": { "nombre_archivo": "...", "version": 3, "id_archivo": "..." },
-  "recipients": [ ... ],
-  "nonce": "...",
-  "ciphertext": "...",
-  "tag": "...",
-  "signature": "<base64_encoded_signature>",
-  "signer_id": "<key_fingerprint>"
-}
+1. [Quick start](#quick-start)
+2. [What the system guarantees](#what-the-system-guarantees)
+3. [Security flow](#security-flow)
+4. [The application (`app.py`)](#the-application-apppy)
+5. [Final demo (`demo_final.py`)](#final-demo-demo_finalpy)
+6. [Architecture](#architecture)
+7. [Key repository and persistent revocation](#key-repository-and-persistent-revocation)
+8. [`.vault` container format](#vault-container-format)
+9. [Tests](#tests)
+10. [Changes in the final version](#changes-in-the-final-version)
+11. [Limitations](#limitations)
+12. [Deliverables D2–D6](#deliverables-d2d6)
+13. [Team](#team)
 
 ---
 
-## D4 | Midterm System Presentation & Security Review
+## Quick start
 
-D4 integrates the previous deliverables into an interactive security demonstration of the Secure Digital Document Vault.
+Requirements: **Python 3.12 or newer** (tested with 3.12.10) and, for the graphical interface, Tkinter.
 
-The demonstration uses Python and Tkinter to illustrate authenticated encryption, multi-recipient file sharing, unauthorized access rejection, and tampering detection.
-
-### Running the Interactive Demo
-
-From the project root directory, install the required dependencies:
+### With the launcher (Linux, macOS and Windows with Git Bash/WSL)
 
 ```bash
-python -m pip install cryptography pytest
+./run.sh            # opens the integrated application
+./run.sh demo       # final console demo (no graphical interface required)
+./run.sh test       # 318 automated tests
+./run.sh info       # platform, Python version and dependencies
+./run.sh ayuda      # all commands (help)
 ```
 
-Launch the graphical interface:
+`run.sh` looks for Python ≥ 3.12 (including the Windows `py` launcher), creates a `.venv`
+virtual environment **specific to the current architecture and operating system** (x86_64,
+arm64/Apple Silicon, armv7l, ppc64le, s390x, riscv64…), recreates it if it was copied from
+another machine, installs `requirements.txt` only when it changes, and tells you which system
+package is missing if something fails to compile. It accepts extra arguments:
+`./run.sh app --tema oscuro`, `./run.sh test -v`.
+
+### Manually with venv
 
 ```bash
-python demo_d4_gui.py
+python3.12 -m venv venv
+source venv/bin/activate          # Windows PowerShell: venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
+python app.py                     # graphical interface
+python demo_final.py              # console demo
+python -m pytest -q               # tests
 ```
 
-Alternatively, run the command-line demonstration:
+If Tkinter is missing: `sudo apt install python3-tk` (Debian/Ubuntu), `sudo dnf install python3-tkinter`
+(Fedora), `brew install python-tk@3.12` (macOS with Homebrew). On Windows it is included with the
+official python.org installer.
 
-```bash
-python demo_d4.py
-```
+---
 
-### Demonstration Scenarios
+## What the system guarantees
 
-| Scenario | Expected Result |
+| Property | Mechanism |
 |:---|:---|
-| File encryption | An encrypted `.vault` container is generated. |
-| Alice (authorized recipient) | Successfully decrypts the file. |
-| Bob (authorized recipient) | Successfully decrypts the same container. |
-| Mallory (unauthorized recipient) | Access is denied. |
-| Tampered ciphertext | AES-GCM authentication fails and decryption is rejected. |
+| Confidentiality | AES-256-GCM with a random key and nonce per file |
+| Per-recipient access | The file key is wrapped with ECIES (secp256k1) for each recipient |
+| Content and metadata integrity | GCM tag + AAD covering the header and the full recipient list |
+| Origin authenticity | Ed25519 signature over the SHA-256 of the **entire** container |
+| Unsigned file = rejected | The integrated system never decrypts an unsigned `.vault` |
+| Complete signature and key | Signature of exactly 64 bytes and a `signer_id` with the full SHA-256 (64 hex) |
+| Persistent revocation | Encrypted on-disk history (scrypt + AES-256-GCM, atomic write with `fsync`) |
+| Removal from the repository | Revoking deletes `ecies.keystore` and `firma.keystore` from disk |
+| Private key protection | One keystore per key: scrypt (N=2¹⁵) + AES-256-GCM with authenticated metadata |
 
-### Security Review
+---
 
-- **D1:** System architecture, trust boundaries, protected assets, and threat model.
-- **D2:** AES-256-GCM authenticated encryption, random nonce generation, and metadata authentication using AAD.
-- **D3:** Hybrid encryption using RSA-OAEP with SHA-256 and per-recipient encrypted file keys.
-- **D4:** Interactive demonstration of the implemented security properties.
+## Security flow
 
-### Current Limitations
+**Sending** — `Encrypt → Wrap key → Sign → Store`
 
-The demonstration uses temporary identities and cryptographic keys. Public-key authenticity is assumed rather than established through a PKI or trusted key directory. Digital signatures for independent sender authentication are not implemented.
+1. The D6 history confirms that the signer is not revoked and that each recipient's public key
+   is their **active** key (you cannot encrypt for a revoked identity).
+2. AES-256-GCM encrypts the document once.
+3. ECIES wraps the file key for each recipient.
+4. Ed25519 signs the entire container, which is stored atomically.
 
-The project is an academic prototype and is not intended for production use.
+**Receiving** — the order is fixed, with no shortcuts:
 
-## D3 | Hybrid Encryption and Secure File Sharing
+| Step | Check | On failure |
+|:---:|:---|:---|
+| 1 | The file **is signed** (unsigned → immediate rejection) | `ErrorFirma` |
+| 2 | **Complete signature** (64 bytes, canonical Base64) **and valid** (Ed25519) | `ErrorFirma` |
+| 3 | **Then the key**: `signer_id` = **full** SHA-256 of the signer's public key | `ErrorFirma` |
+| 4 | D3 container format | `ContenedorInvalido` |
+| 5 | The sender's signing key is **not revoked** | `FirmanteRevocado` |
+| 6 | The recipient's ECIES key is the **active** one in the history | `ErrorCicloVida` |
+| 7 | ECIES access + AES-GCM authentication → decryption | `DestinatarioNoAutorizado`, `InvalidTag` |
 
-D3 extends the vault so that a file is **encrypted once** and shared with **multiple authorized recipients**. Only those recipients can decrypt it, even if the `.vault` container is publicly exposed.
+The recovered document is written only if all seven steps pass. If any of them fails, **no file
+is written**.
 
-The system uses **hybrid encryption**:
+---
 
-1. Generate a random 256-bit **file key**.
-2. Encrypt the file once with **AES-256-GCM** (the AEAD from D2).
-3. Encrypt (wrap) the file key separately with each recipient's ECIES public key (secp256k1).
-4. Store every wrapped key in the container, identified by the SHA-256 fingerprint of the recipient's public key.
+## The application (`app.py`)
 
-Public keys are only ever used on the 32-byte file key, never on the file itself.
+A macOS-style interface built with Tkinter only: sidebar, rounded cards, segmented controls,
+modal sheets, tooltips and smooth transitions. The interface text is in Spanish.
 
-### Cryptographic Specifications (D3)
+* **Adapts to any computer**: automatic light/dark mode following the system (or forced with
+  `--tema`), HiDPI scaling (enables *DPI awareness* on Windows), each system's native font
+  (San Francisco, Segoe UI, Inter/Cantarell/Noto…), a grid that switches from 2 to 1 column in
+  narrow windows, mouse-wheel scrolling on all three systems, and an initial size based on the
+  screen (works from 800×600).
+* **Startup**: asks for the key-history password (or creates it the first time). If it is wrong,
+  the error is shown on the same screen.
 
-| Component | Implementation |
+| Section | What it does |
 |:---|:---|
-| File encryption | AES-256-GCM (AEAD) |
-| Key wrapping | ECIES (secp256k1) |
-| Elliptic curve | secp256k1 (256-bit private keys) |
-| Key identifier (`key_id`) | SHA-256 of the DER SubjectPublicKeyInfo of the public key |
-| ECIES context binding | SHA-256 of File ID + `key_id` + recipient ID, encrypted alongside the AES file key using ECIES |
-| AAD | Canonical JSON of the full header and the full ordered recipient list, with algorithm identifiers |
-| Private key storage | Password-encrypted PKCS#8 PEM |
-| Container | JSON `.vault`, format version 3 |
+| **Identidades** (Identities) | Creates identities (or the 4 demo ones), shows their status (Active, Revoked, Unregistered), SHA-256 fingerprints (click to copy), unlocks/locks and **revokes**. |
+| **Enviar** (Send) | Document → sender (signature) → one or more recipients → encrypted and signed `.vault`. Revoked identities are not offered as recipients. |
+| **Recibir** (Receive) | Opens any `.vault`, identifies the sender by their `signer_id` in the local directory and shows the verification step by step (✓ / ✕). |
+| **Laboratorio** (Lab) | Mallory's attacks on an in-memory copy: remove the signature, flip one bit, truncated signature, key with a truncated hash, sender impersonation, and Mallory as a non-recipient. |
+| **Actividad** (Activity) | Security log of the session; can be exported to `.txt`. |
 
-### Container Format
+Private keys live in memory only while the identity is unlocked (**Bloquear sesión** / Lock
+session discards them). The app does not store passwords.
+
+Options: `python app.py --identidades OTHER_FOLDER --tema auto|claro|oscuro`
+(also via the `VAULT_IDENTIDADES` and `VAULT_TEMA` environment variables).
+
+**Suggested walkthrough for the presentation**
+
+1. *Identidades* → **Crear alice, bob, carol y mallory** (create the demo identities).
+2. *Enviar* → choose a document, sender **alice**, recipients **bob** and **carol**.
+3. *Recibir* → open as **bob**: all 4 steps turn green.
+4. *Laboratorio* → **Ejecutar todos** (run all): the 6 attacks are blocked.
+5. *Identidades* → **Revocar** (revoke) bob, close the app and reopen it: he is still revoked and
+   his keys are no longer in `identidades_demo/bob/`.
+6. *Recibir* → opening as **carol** still works; revoking **alice** makes her file stop opening
+   (*Remitente vigente* / sender still valid, shown in red).
+
+---
+
+## Final demo (`demo_final.py`)
+
+Runs through the whole system in the console, using the same modules as the application, and
+verifies 19 expected results (exit code 0 if all of them pass). It needs no graphical interface:
+it works over SSH, on servers and in CI.
+
+```bash
+python demo_final.py                      # uses a temporary folder
+python demo_final.py --carpeta output     # keeps the generated identities and .vault files
+```
+
+Stages: identities and persistent history → signed send to bob and carol → reception →
+6 attacks + unsigned D3 file → persistent revocation of bob (restart, keystores deleted,
+nobody can encrypt for bob, the restored key cannot be re-registered, carol keeps working) →
+revocation of the signer alice.
+
+The historical demos are still available: `python demo_d4_gui.py` (D3 without signatures, kept
+only as a D4 reference) and `python demo_d5.py`.
+
+---
+
+## Architecture
+
+```
+app.py ──────────┐            demo_final.py ─────┐
+                 ▼                               ▼
+        vault/integrated_vault.py  (integrated-system facade)
+          │            │                 │                 │
+          ▼            ▼                 ▼                 ▼
+  signed_sharing.py  key_lifecycle.py  keystore.py   persistencia.py
+     │      │           (D6)             (D6)        (atomic writes)
+     ▼      ▼
+ signatures.py  sharing.py ── shared_container.py ── public_key.py
+     (D5)          (D3)              (D3)               (D3, ECIES)
+                     │
+          encryption.py · decryption.py · key_management.py · container.py (D2)
+```
+
+| Module | Responsibility |
+|:---|:---|
+| `vault/integrated_vault.py` | Identities, public directory, send/receive, sender identification, revocation. |
+| `vault/signed_sharing.py` | Encrypt → sign; verify signature → key → revocation → decrypt. |
+| `vault/signatures.py` | Ed25519: what is signed, complete signature and `signer_id` with the full hash. |
+| `vault/key_lifecycle.py` | Persistent D6 state: registration, rotation, history, revocation of ECIES and signing fingerprints. |
+| `vault/keystore.py` | Encrypted private keys (scrypt + AES-256-GCM) and removal from the repository. |
+| `vault/persistencia.py` | Atomic, durable writes (temporary file → `fsync` → `os.replace` → directory `fsync`). |
+| `vault/ataques.py` | Simulated attacks shared by the app, the demo and the tests. |
+| `vault/sharing.py`, `shared_container.py`, `public_key.py` | D3: multi-recipient container and ECIES. |
+| `vault/encryption.py`, `decryption.py`, `key_management.py`, `container.py` | D2: password-based AES-256-GCM. |
+| `vault/key_backup.py` | Keystore backup and restore. |
+
+---
+
+## Key repository and persistent revocation
+
+```
+identidades_demo/                 (excluded from git)
+├── historial_claves.enc          encrypted D6 state: versions, history and revoked fingerprints
+├── alice/
+│   ├── ecies.keystore            ECIES secp256k1 private key (encrypted)
+│   ├── firma.keystore            Ed25519 private key (encrypted)
+│   └── publica.json              public directory: PEM + SHA-256 fingerprints
+└── bob/ …
+```
+
+**Revoking an identity**:
+
+1. Marks the record as `revocada` (revoked), stores the reason and adds **both fingerprints**
+   (ECIES and signing) to the revocation list. The history is rewritten encrypted, with an atomic
+   write and `fsync`, **before** anything else is touched (fails closed: if the disk fails, the
+   revocation stays active in memory and a warning is raised).
+2. Deletes `ecies.keystore` and `firma.keystore` from the repository (overwriting them with random
+   bytes before deletion, as a best effort).
+3. Keeps `publica.json` so the app can show that the identity is revoked.
+
+Effects that **survive a restart**: nobody can encrypt for the revoked identity, it cannot
+decrypt, files signed with its key are rejected, and a restored copy of its key **cannot be
+registered again**.
+
+The public directory is validated against its own fingerprints and against the encrypted
+history: if someone replaces `publica.json`, the app detects it (`DirectorioAlterado`).
+
+---
+
+## `.vault` container format
 
 ```json
 {
   "header": { "nombre_archivo": "...", "fecha": "...", "version": 3,
-            "algoritmo": "AES-256-GCM", "algoritmo_envoltura": "ECIES-SECP256K1",
+              "algoritmo": "AES-256-GCM", "algoritmo_envoltura": "ECIES-SECP256K1",
               "algoritmo_huella": "SHA256-SPKI-DER", "id_archivo": "..." },
-  "recipients": [
-    { "id": "alice", "key_id": "<sha256 hex>", "encrypted_key": "<base64>" },
-    { "id": "bob",   "key_id": "<sha256 hex>", "encrypted_key": "<base64>" }
-  ],
-  "nonce": "...",
-  "ciphertext": "...",
-  "tag": "..."
+  "recipients": [ { "id": "bob", "key_id": "<sha256 hex>", "encrypted_key": "<base64>" } ],
+  "nonce": "...", "ciphertext": "...", "tag": "...",
+  "signer_id": "<full sha256 hex of the Ed25519 public key>",
+  "signature_algorithm": "ED25519-SHA256",
+  "signature": "<64 bytes in base64>"
 }
 ```
 
-Adding, removing, reordering or modifying any recipient entry (or any header field) changes the AAD and makes decryption fail for everyone who does not hold the file key. See the limitations in the design document (no sender authentication, recipients are trusted with the file key).
-
-### Usage
-
-```python
-from vault.public_key import generar_par_claves
-from vault.sharing import compartir_archivo, abrir_archivo_compartido
-
-alice = generar_par_claves()
-bob = generar_par_claves()
-
-# Encrypt once, share with Alice and Bob
-compartir_archivo(
-    "contrato.pdf",
-    "contrato.vault",
-    {"alice": alice.public_key(), "bob": bob.public_key()},
-)
-
-# Either recipient opens it with their own private key
-datos = abrir_archivo_compartido("contrato.vault", bob, id_usuario="bob")
-```
-
-Before sharing, verify each public key against a fingerprint obtained through a trusted channel:
-
-```python
-from vault.public_key import huella_clave_publica, verificar_huella
-
-print(huella_clave_publica(bob.public_key()))   # compare out of band
-verificar_huella(bob.public_key(), huella_esperada)
-```
-
-### D3 Modules
-
-| Module | Responsibility |
-|:---|:---|
-| `vault/public_key.py` | ECIES (secp256k1) key pairs, fingerprints, PEM import/export, ECIES wrap/unwrap. |
-| `vault/shared_container.py` | Version 3 container format, strict validation, AAD construction. |
-| `vault/sharing.py` | Multi-recipient encryption and recipient-based decryption. |
-
-The D2 modules are unchanged; version 1 (password) containers continue to work.
-
-### Documentation
-
-See [`docs/D3_HYBRID_DESIGN.md`](docs/D3_HYBRID_DESIGN.md) for the hybrid design explanation, security decisions (key identification, recipient-list tampering, wrong public keys), known limitations and the requirement-to-test map.
+The signature covers `SHA-256(context || canonical JSON of the container without "signature")`,
+so any change to the content, metadata, recipients, signer or algorithm invalidates it.
 
 ---
 
-## D2 | Secure Symmetric Encryption Module
-
-This deliverable implements the cryptographic core of the Secure Digital Document Vault, providing secure file encryption and decryption for a single owner.
-
-The implementation uses AES-256-GCM, an authenticated encryption algorithm that provides:
-
-- Confidentiality of encrypted files.
-- Integrity verification.
-- Detection of unauthorized modifications.
-- Authentication of file metadata.
-
-### Cryptographic Specifications
-
-| Component | Implementation |
-|:---|:---|
-| Encryption algorithm | AES-256-GCM (AEAD) |
-| Encryption key | 256 bits (32 bytes) |
-| Nonce | 96 bits (12 bytes) |
-| Key derivation | Scrypt |
-| Salt | 128 bits (16 bytes) |
-| Metadata authentication | Additional Authenticated Data (AAD) |
-| Secure randomness | `os.urandom()` |
-| Output format | JSON-based `.vault` container |
-
----
-
-## System Architecture
-
-The system is organized into four independent modules:
-
-| Module | Responsibility |
-|:---|:---|
-| `vault/encryption.py` | Encrypts file contents using AES-256-GCM. |
-| `vault/key_management.py` | Generates and protects cryptographic keys. |
-| `vault/container.py` | Creates, validates, stores, and reads encrypted containers. |
-| `vault/decryption.py` | Decrypts files and verifies authentication. |
-
-### Encryption Process
-
-1. Read the original file.
-2. Generate a fresh 256-bit encryption key and a random nonce.
-3. Generate and authenticate file metadata using AAD.
-4. Encrypt the file using AES-256-GCM.
-5. Protect the encryption key using Scrypt and AES-GCM.
-6. Store the encrypted information in a `.vault` container.
-
-### Decryption Process
-
-1. Read the encrypted container.
-2. Recover the file encryption key using the owner's password.
-3. Verify the authentication of the ciphertext and metadata.
-4. Decrypt and recover the original file.
-
-If authentication fails, the decryption operation is rejected.
-
----
-
-## Installation
-
-### Requirements
-
-- Python 3.12 or newer
-- cryptography
-- pytest
-- eciespy
-Install the dependencies:
+## Tests
 
 ```bash
-python -m pip install -r requirements.txt
+python -m pytest -q          # or ./run.sh test
 ```
 
-## Testing
+| File | Tests | Covers |
+|:---|---:|:---|
+| `test_encryption.py`, `test_decryption.py`, `test_container.py`, `test_key_management.py` | 30 | D2 |
+| `test_public_key.py`, `test_shared_container.py`, `test_sharing.py` | 134 | D3 |
+| `test_signatures.py`, `test_signed_sharing.py` | 67 | D5 |
+| `test_keystore.py`, `test_key_backup.py`, `test_key_lifecycle.py` | 44 | D6 |
+| `test_integrated_vault.py`, `test_revocacion_persistente.py` | 24 | D2–D6 integration |
+| `test_sistema_integrado.py` | 18 | Final version: directory, attacks, signer revocation, re-registration |
+| `test_demo_final.py` | 1 | End-to-end final demo |
+| **Total** | **318** | |
 
-The project includes 164 automated tests implemented with Pytest, covering D2 and D3.
-
-Run all tests from the project root directory:
-
-```bash
-python -m pytest -v
-```
-
-### Test Results
-
-| Deliverable | Module | Tests | Result |
-|:---|:---|---:|:---|
-| D2 | Encryption | 6 | Passed |
-| D2 | Key Management | 9 | Passed |
-| D2 | Container | 8 | Passed |
-| D2 | Decryption | 7 | Passed |
-| D3 | Public Keys (`test_public_key.py`) | 19 | Passed |
-| D3 | Shared Container (`test_shared_container.py`) | 77 | Passed |
-| D3 | Sharing (`test_sharing.py`) | 38 | Passed |
-| | **Total** | **164** | **Passed** |
-### Security Validation
-
-The D2 implementation includes tests for:
-
-1. Successful encryption and decryption.
-2. Rejection of incorrect keys or passwords.
-3. Detection of modified ciphertext.
-4. Detection of modified metadata.
-5. Different ciphertexts from independent encryption operations.
-
-The D3 implementation adds tests proving that:
-
-1. A file shared with two users can be decrypted by both.
-2. An unauthorized user cannot decrypt, even with the container in hand.
-3. A tampered recipient list (added, renamed, reordered or modified entries) makes decryption fail.
-4. A wrong private key fails.
-5. Removing a recipient entry breaks access.
-6. ECIES public keys are used to protect the 32-byte AES file key, and RSA keys or unsupported elliptic curves are rejected.
-7. Malformed containers (unknown or duplicate fields, non-canonical Base64, look-alike recipient IDs) are rejected with a single error type.
-
-**Result: 164 tests passed successfully.**
----
-
-## Security Considerations
-
-AES-256-GCM provides authenticated encryption, combining confidentiality and integrity protection.
-
-Each file receives a fresh random encryption key and nonce. Reusing the same nonce with the same AES-GCM key can compromise security.
-
-File metadata is authenticated using AAD, preventing unauthorized modifications from going undetected during decryption.
-
-Cryptographic keys, nonces, and salts are generated using operating-system-provided secure randomness.
-
-
-## Current Scope
-
-D2 supports password-protected encryption and decryption for a single owner using AES-256-GCM. D3 extends the system with hybrid encryption, allowing secure file sharing with multiple authorized recipients using RSA-OAEP.
-
-D4 integrates these functionalities into an interactive security demonstration developed with Python and Tkinter. The demonstration includes file encryption, successful decryption by authorized recipients (Alice and Bob), rejection of unauthorized access (Mallory), and detection of tampered encrypted files.
-
-The following features are outside the current scope:
-
-- Public-key authenticity infrastructure (PKI or verified key directory); fingerprint verification is provided.
-- Digital signatures for independent sender authentication.
-- Revocation of previously granted access (removing a recipient requires re-encrypting the file).
-- Full security auditing.
-- Production-ready identity and key management.
-
-This project is an academic prototype intended to demonstrate cryptographic security principles.
+GitHub Actions runs the tests and the final demo on Ubuntu, macOS and Windows with Python 3.12 and 3.13.
 
 ---
 
+## Changes in the final version
 
-## Development Team
+**Requirements addressed**
 
-Universidad Nacional Autónoma de México  
-Faculty of Engineering  
-Cryptography · Group 4 · Semester 2027-1
+* **Unsigned file → not decrypted**: the integrated system only opens signed `.vault` files;
+  `identificar_remitente` immediately rejects a container without signature fields.
+* **Always the signature first, then the key, both complete**: the exact 64-byte signature is
+  verified first; then the `signer_id` with the full SHA-256; then the revocation status of the
+  signer and of the recipient.
+* **Persistent on-disk revocation**: encrypted history with atomic writes and `fsync`; a list of
+  revoked fingerprints prevents re-registering a restored key.
+* **The key leaves the repository**: revoking deletes `ecies.keystore` **and** `firma.keystore`.
+* **`run.sh` launcher** for multiple platforms and architectures.
+* **Integration in `app.py`**: identity creation (formerly `preparar_demo.py`), sending,
+  receiving, attack lab, revocation and logging in a single application; new `demo_final.py`.
 
-| Student ID | Team Member | GitHub |
+**Fixes and cleanup**
+
+* The app no longer asks for the **recipient's** password to encrypt for them, nor for the
+  sender's password to verify: it uses the public directory (`publica.json`), validated against
+  the history.
+* The app no longer keeps passwords in memory; it works with the unlocked keys.
+* Wrong history password: it used to close the app with an unhandled error; now you can retry on
+  the unlock screen.
+* `historial_claves` existed but was never filled: it now stores rotated/revoked versions.
+* Revocation of the signing key was added (`FirmanteRevocado`).
+* A single atomic-write function (`vault/persistencia.py`) instead of three versions; `.vault`
+  files are written with `fsync` and without orphaned temporary files.
+* The history password policy now matches the keystore policy (when the history is created).
+* Fingerprint comparisons run in constant time (`hmac.compare_digest`).
+* Unused imports removed from `decryption.py`, `encryption.py` and `key_backup.py`.
+* `preparar_demo.py` was removed: its functionality is now part of the application.
+
+---
+
+## Limitations
+
+* Academic prototype; not intended for production use.
+* The local public directory acts as the trusted channel; there is no PKI. To share across
+  machines, verify fingerprints through an independent channel (`enviar_archivo_verificado`).
+* Revoking a signer also invalidates the files it signed **before** the revocation (there is no
+  trusted timestamping).
+* Anyone who can delete `historial_claves.enc` and restore keystore backups can rebuild a keyring;
+  the encrypted history prevents its **modification** without the password, not its deletion.
+* Overwriting before deletion does not guarantee physical erasure on SSDs or copy-on-write
+  filesystems; the real protection is the keystore encryption.
+* Key rotation exists in `key_lifecycle.py`, but the app does not expose it yet.
+
+---
+
+## Deliverables D2–D6
+
+| Deliverable | Content |
+|:---|:---|
+| D2 | Password-based (scrypt) AES-256-GCM symmetric encryption for a single owner. |
+| D3 | Hybrid encryption: one file shared with multiple recipients using ECIES secp256k1. See [`docs/D3_HYBRID_DESIGN.md`](docs/D3_HYBRID_DESIGN.md). |
+| D4 | Interactive demonstration and security review ([`docs/D4_Criptography.pdf`](docs/D4_Criptography.pdf)). |
+| D5 | Ed25519 digital signatures over the full container (`D5 - Signatures & Authentication.pdf`). |
+| D6 | Key management: keystores, backup, lifecycle and persistent revocation ([`docs/D6 - Key Management_T4.pdf`](docs/D6%20-%20Key%20Management_T4.pdf)). |
+
+---
+
+## Team
+
+Universidad Nacional Autónoma de México · Faculty of Engineering · Cryptography · Group 4 · 2027-1
+
+| Student ID | Team member | GitHub |
 |:---|:---|:---|
 | 319215555 | Alfaro Dominguez Arturo | @R2D2Alfa |
 | 422526115 | Herrera Gallegos Karina Jezuleth | @Jezuleth |
 | 422526067 | Sanchez Duran Dannae | @ddanae |
 | 422534286 | Infante Martinez Javier de Jesus | @JavierInfanteB |
-
----
-
-
-## D4 - Interactive Security Demonstration
-
-The project includes an interactive demonstration of the
-Secure Digital Document Vault using the cryptographic modules
-implemented in D2 and D3.
-
-### Requirements
-
-- Python 3.12 or newer
-- Dependencies from `requirements.txt`
-- Tkinter (included in most standard Python installations)
-
-Install dependencies:
-
-```bash
-python -m pip install -r requirements.txt
-```
-
-### Run the graphical demonstration
-
-From the project root:
-
-```bash
-python demo_d4_gui.py
-```
-
-### Demonstration scenarios
-
-1. **Select Document:** Choose a local file to encrypt.
-2. **Encrypt & Share:** Encrypt the document once using AES-256-GCM and protect its file key separately for Alice and Bob using ECIES (secp256k1).
-3. **Authorized Decryption:** Alice and Bob can decrypt the container using their corresponding private keys.
-4. **Unauthorized Access:** Mallory attempts to decrypt the same container and is denied access.
-5. **Tampering Detection:** Modify a byte of a copy of the encrypted container and verify that AES-GCM rejects the modified ciphertext.
-
-The interface displays the original document, a preview of the
-ciphertext, recovered content, and security verification results.
-
-### Run the command-line demonstration
-
-```bash
-python demo_d4.py
-```
-
-### Run automated tests
-
-```bash
-python -m pytest -v
-```
-
-The D4 demonstration uses the existing cryptographic modules
-and does not replace the project's automated security tests.
-
-**Note:** Demonstration keys are generated temporarily.
-The application is an educational prototype, not a production
-key-management or user-authentication system.
