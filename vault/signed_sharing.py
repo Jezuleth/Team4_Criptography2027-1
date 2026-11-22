@@ -134,9 +134,15 @@ def descifrar_contenedor_firmado(
     clave_privada,
     id_usuario: str,
     clave_publica_firmante: Ed25519PublicKey,
-    gestor_claves=None,
+    gestor_claves,
 ) -> bytes:
-    """Verifica firma, estado de clave y descifra con D3."""
+    """Verifica firma, estado de clave y descifra con D3.
+
+    `gestor_claves` es obligatorio: sin él no habría forma de rechazar una
+    clave revocada, y una revocación que se puede omitir no revoca nada.
+    """
+    if gestor_claves is None:
+        raise ValueError("Se requiere un gestor de claves para validar la revocación.")
 
     # 1. Verificar la firma digital.
     interno = verificar_contenedor_firmado(
@@ -144,12 +150,11 @@ def descifrar_contenedor_firmado(
         clave_publica_firmante,
     )
 
-    # 2. Aplicar política de revocación de D6.
-    if gestor_claves is not None:
-        gestor_claves.validar_clave_para_uso(
-            id_usuario,
-            clave_privada,
-        )
+    # 2. Aplicar política de revocación de D6 (estado persistido en disco).
+    gestor_claves.validar_clave_para_uso(
+        id_usuario,
+        clave_privada,
+    )
 
     # 3. Descifrar únicamente si las validaciones pasan.
     return descifrar_como_destinatario(
@@ -185,8 +190,8 @@ def abrir_archivo_firmado(
     clave_privada,
     id_usuario: str,
     clave_publica_firmante: Ed25519PublicKey,
+    gestor_claves,
     ruta_salida=None,
-    gestor_claves=None,
 ) -> bytes:
     """Verifica firma y revocación antes de descifrar."""
 

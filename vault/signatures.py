@@ -31,6 +31,7 @@ import binascii
 import hashlib
 import hmac
 import json
+import re
 from typing import Any, Mapping
 
 from cryptography.exceptions import InvalidSignature
@@ -48,6 +49,8 @@ CONTEXTO_FIRMA = b"SECURE-DIGITAL-DOCUMENT-VAULT/D5/SIGNATURE/v1\x00"
 CAMPOS_FIRMA = ("signer_id", "signature_algorithm", "signature")
 
 _LONGITUD_FIRMA = 64
+# signer_id = SHA-256 COMPLETO (32 bytes) en hexadecimal minúsculas.
+_HUELLA_COMPLETA = re.compile(r"[0-9a-f]{64}")
 _MENSAJE = "Firma inválida: el contenedor no es auténtico o fue modificado."
 
 
@@ -174,10 +177,26 @@ def _decodificar_firma(valor: Any) -> bytes:
     return firma
 
 
+def _verificar_huella_firmante(signer_id: Any, clave_publica: Ed25519PublicKey) -> None:
+    """La llave: signer_id debe ser el hash COMPLETO de la clave pública."""
+    if not isinstance(signer_id, str) or _HUELLA_COMPLETA.fullmatch(signer_id) is None:
+        raise ErrorFirma(_MENSAJE)
+    if not hmac.compare_digest(
+        signer_id.encode("ascii"),
+        huella_clave_firma(clave_publica).encode("ascii"),
+    ):
+        raise ErrorFirma(_MENSAJE)
+
+
 def verificar_contenedor(
     contenedor: Mapping[str, Any], clave_publica: Ed25519PublicKey
 ) -> None:
     """Verifica la firma. No devuelve nada: o pasa, o lanza ErrorFirma.
+
+    Orden fijo (siempre el mismo, sin atajos):
+      1. Campos de firma presentes y algoritmo esperado (sin downgrade).
+      2. FIRMA: completa (64 bytes, Base64 canónico) y válida (Ed25519).
+      3. LLAVE: signer_id con el hash completo (64 hex) de `clave_publica`.
 
     `clave_publica` debe provenir de un canal confiable (ver huella).
     """
@@ -189,21 +208,13 @@ def verificar_contenedor(
     for campo in CAMPOS_FIRMA:  # firma eliminada -> rechazo
         if campo not in contenedor:
             raise ErrorFirma(_MENSAJE)
-
-    signer_id = contenedor["signer_id"]
-    if not isinstance(signer_id, str):
-        raise ErrorFirma(_MENSAJE)
-    if contenedor["signature_algorithm"] != ALGORITMO_FIRMA:  # sin downgrade
-        raise ErrorFirma(_MENSAJE)
-    # La clave esperada debe ser la que el contenedor declara como firmante.
-    if not hmac.compare_digest(
-        signer_id.encode("ascii", "replace"),
-        huella_clave_firma(clave_publica).encode("ascii"),
-    ):
+    if contenedor["signature_algorithm"] != ALGORITMO_FIRMA:
         raise ErrorFirma(_MENSAJE)
 
-    firma = _decodificar_firma(contenedor["signature"])
+    firma = _decodificar_firma(contenedor["signature"])  # 64 bytes completos
     try:
         clave_publica.verify(firma, digest_a_firmar(contenedor))
     except (InvalidSignature, ValueError, TypeError):
         raise ErrorFirma(_MENSAJE) from None
+
+    _verificar_huella_firmante(contenedor["signer_id"], clave_publica)

@@ -223,3 +223,28 @@ def cargar_keystore(ruta):
         raise ErrorKeystore(
             "No se pudo cargar el almacén."
         ) from exc
+
+
+def eliminar_keystore(ruta):
+    """Retira un almacén del repositorio de claves. True si existía.
+
+    Sobrescribe el contenido con bytes aleatorios antes de borrarlo (mejor
+    esfuerzo: en SSD, sistemas copy-on-write o con journaling no hay garantía
+    de borrado físico; el cifrado del almacén sigue siendo la protección real).
+    """
+    ruta = Path(ruta)
+    try:
+        if not ruta.is_symlink():
+            tamano = ruta.stat().st_size
+            with open(ruta, "r+b") as archivo:
+                archivo.write(os.urandom(tamano))
+                archivo.flush()
+                os.fsync(archivo.fileno())
+        ruta.unlink()
+    except FileNotFoundError:
+        return False
+    except OSError as exc:
+        raise ErrorKeystore(
+            "No se pudo eliminar el almacén de claves."
+        ) from exc
+    return True
